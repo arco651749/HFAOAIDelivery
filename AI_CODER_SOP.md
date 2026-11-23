@@ -49,7 +49,90 @@ projects/<客戶名稱>-<客戶專案>/
 
 ---
 
-## 三、 標準作業步驟
+## 三、 跨語言標準函式庫白名單與「OpenCV 5.0 單一核心」原生 DLL 封裝規範
+
+本平台採 **「OpenCV 5.1 大一統架構（影像處理 + AI 推論共用同一套 `cv::dnn` 引擎）」**：線上開發與盲測用 Python（極速迭代），結案交付 1:1 轉譯為**單一原生 C++ DLL（零安裝、跨語言呼叫、0 數值漂移）**。
+
+### 3.1 各語言標準函式庫白名單
+
+| 語言 / 階段 | 影像處理標準庫 | AI 推論標準庫 | 嚴禁使用（防堵無法封裝單檔之套件） |
+| :--- | :--- | :--- | :--- |
+| **Python（線上開發與雲端盲測 `detector_dev.py` / `detector.py`）** | `opencv-python` (`cv2` ≥ 5.1)、`numpy`、`Pillow`（僅用於繪製中文標註字體） | **🏆 主力首選：`cv2.dnn` (`OpenCV 5.1 ENGINE_AUTO / ENGINE_OPENCV`)**<br>*(一律以 `np.fromfile(path, np.uint8)` 讀入記憶體 Buffer 後呼叫 `cv2.dnn.readNetFromONNX(buf)`，預設即啟用新版圖引擎，兼顧 Windows 中文路徑安全並 1:1 對齊 C++ 內嵌權重！)*<br>🥈 僅遇極少數冷門不支援算子或需 GPU 加速時才退用 `onnxruntime`<br>*(註：`ultralytics` / `torch` **僅限訓練與匯出 `.onnx` 腳本**，嚴禁在 `detector.py` 推論路徑中 `import`)* | 嚴禁在推論主流程使用 `scipy`、`scikit-image`、`scikit-learn`、`pandas`、`torch` 等難以平轉 C++ 靜態編譯的套件 |
+| **C++（單檔原生 DLL 核心引擎 `MetaVisionAOI.dll`）** | **唯一一套靜態編譯 `OpenCV 5.1`**（僅編譯 `core`、`imgproc`、`imgcodecs`、`dnn` 四個模組，搭配 MSVC `/MT` Static CRT） | **同一套 `OpenCV 5.1 cv::dnn (ENGINE_AUTO / ENGINE_OPENCV)` 直接吃 `.onnx` 記憶體陣列**（免綁 `ncnn`、免外帶 `onnxruntime.dll`、免額外模型格式轉換；僅 GPU / 冷門算子案選配 `ENGINE_ORT`） | 嚴禁使用 `/MD` 動態 CRT（防客戶端缺少 `vcruntime140.dll`）、嚴禁依賴 Python/CUDA Runtime 作為 CPU 單檔預設前提 |
+| **C# / C++ / Python 客戶端呼叫層** | 客戶端自備影像來源（`OpenCvSharp` / `Bitmap` / `cv::Mat` / `numpy`），直接傳入 **BGR 連續記憶體指標**或**圖檔路徑** | **無須安裝任何 OpenCV、AI 或 VC++ 執行環境** | 不強迫客戶端綁定特定 OpenCV 或 .NET 版本 |
+
+### 3.2 單一原生 DLL 零安裝靜態編譯規範（Windows x64 + OpenCV 5.0）
+欲達成「**客戶只拿到 1 顆 `.dll`，不用裝 OpenCV、不用裝 Python、不用裝 ONNX Runtime、連 Microsoft Visual C++ Redistributable 都不用裝**」，編譯時必須遵守：
+1. **從 OpenCV 5.1 原始碼一次性靜態編譯四個核心模組**：
+   ```powershell
+   $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+   git clone --branch 5.1.0 --depth 1 https://github.com/opencv/opencv.git D:\opencv5_src
+   & $cmake -S D:\opencv5_src -B D:\opencv5_build -G "Visual Studio 17 2022" -A x64 `
+     "-DCMAKE_GENERATOR_INSTANCE=C:/Program Files (x86)/Microsoft Visual Studio/2022/BuildTools" `
+     -DBUILD_SHARED_LIBS=OFF `
+     -DBUILD_WITH_STATIC_CRT=ON `
+     "-DBUILD_LIST=core,imgproc,imgcodecs,dnn" `
+     -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF `
+     -DBUILD_opencv_apps=OFF -DBUILD_opencv_python3=OFF -DBUILD_JAVA=OFF `
+     -DWITH_FFMPEG=OFF -DWITH_GSTREAMER=OFF -DWITH_MSMF=OFF -DWITH_DSHOW=OFF `
+     -DCMAKE_INSTALL_PREFIX=D:\opencv5_static
+   & $cmake --build D:\opencv5_build --config Release --target INSTALL --parallel
+   ```
+   *(編譯完成後永久保存於 `D:\opencv5_static\`，之後每顆專案 `MetaVisionAOI.dll` 只需 3～5 秒即可編譯完成！)*
+2. **MSVC 編譯器必設 `/MT`（Static CRT）**：所有靜態 `.lib` 與主專案一律對齊 `MultiThreaded (/MT)`，確保零外部系統 DLL 依賴。
+3. **ONNX 權重內嵌防盜（真單檔無外露權重）**：
+   - 訓練端匯出標準 `.onnx` 後，轉為 C++ 靜態位元陣列（`const unsigned char kModelOnnx[]`）直接編譯進 `MetaVisionAOI.dll`（可選擇簡單 XOR/AES 混淆於載入記憶體時還原）。
+   - 推論初始化直接呼叫 `cv::dnn::readNetFromONNX((const char*)kModelOnnx, sizeof(kModelOnnx))`（預設 `ENGINE_AUTO` 即啟用 OpenCV 5.1 新圖引擎），交付時不外露任何外部權重檔案。
+
+### 3.3 統一跨語言 C ABI 匯出介面 (`extern "C"`)
+所有單檔 DLL 一律匯出純 C ABI（零 C++ Name Mangling、零 STL 跨邊界問題），輸入支援「記憶體 BGR 指標」與「UTF-8 圖檔路徑」，輸出統一為 **UTF-8 JSON 字串**：
+
+```c
+// MetaVisionAOI.h — 跨語言統一 C ABI 合約（C++ / C# P/Invoke / Python ctypes 共用）
+#ifdef _WIN32
+  #define MV_API __declspec(dllexport)
+#else
+  #define MV_API
+#endif
+
+extern "C" {
+    // 1. 建立檢測器實例（config_json 可傳 NULL 使用預設參數；失敗回傳 NULL）
+    MV_API void* MV_Create(const char* config_json);
+
+    // 2. 記憶體 BGR 影像直接推論（推薦產線相機零寫碟高速呼叫）
+    //    回傳值：0=成功, >0=緩衝區不足(回傳所需位元組數), <0=錯誤碼
+    MV_API int MV_Detect(
+        void* handle,
+        const unsigned char* bgr_data,
+        int width,
+        int height,
+        int stride,
+        char* out_json_buf,
+        int buf_size
+    );
+
+    // 3. UTF-8 檔案路徑推論（支援 Windows 中文路徑，內部以寬字元開啟）
+    MV_API int MV_DetectFile(
+        void* handle,
+        const char* utf8_image_path,
+        char* out_json_buf,
+        int buf_size
+    );
+
+    // 4. 釋放實例資源
+    MV_API void MV_Destroy(void* handle);
+}
+```
+
+- **標準交付附帶呼叫薄封裝（隨 DLL 一併交付）**：
+  - `MetaVisionAOI.dll`（唯一核心二進位檔）
+  - `MetaVisionAOI.h`（C / C++ 標頭檔）
+  - `MetaVisionAOI.cs`（C# P/Invoke `[DllImport("MetaVisionAOI.dll")]` 封裝類別，.NET Framework / .NET 6~9 通用）
+  - `metavision_aoi.py`（Python `ctypes` 封裝模組與範例）
+
+---
+
+## 四、 標準作業步驟
 
 ### Step 1：讀取定案規格書
 1. 讀取 `projects\<客戶名稱>-<客戶專案>\ANALYST\ANALYST.md`。
@@ -83,9 +166,10 @@ projects/<客戶名稱>-<客戶專案>/
 3. 將 `CODER/CODER.md` 標頭更新為 `- **Status**: \`DEPLOYED\``，**向 Manager 回報**由 Manager 更新 `STATE.json`（`DEPLOYED` 與版本號如 `v1.0`）並通知客戶盲測。
 
 ### Step 5：結案打包與交付（收到 Manager 轉達結案指令時執行）
-1. 依客戶選擇的交付方案（參見 [AOI_Delivery_Playbook.md](./AOI_Delivery_Playbook.md) 第四節）：
+1. 依客戶選擇的交付方案（參見 [AOI_Delivery_Playbook.md](./AOI_Delivery_Playbook.md) 階段 4）：
    - **方案 A（Windows 離線綠色版）**：封裝 `CODER/detector.py` + 精簡純檢測介面 + 一鍵啟動 `.bat` + 環境健檢腳本。
    - **方案 B（產線機台 Watchdog）**：封裝資料夾監聽、`.tmp` Atomic Rename 防搶讀、Heartbeat 心跳與 FIFO 清理。
    - **方案 C（乾淨雲端 Space）**：建立全新無 Git 歷史的 Space 上傳最終版。
+   - **方案 D（單一原生 C++ DLL SDK — 零安裝跨語言）**：依第三節規範以單一靜態 `OpenCV 5.0`（`core, imgproc, imgcodecs, dnn` + `/MT`）搭配 `ENGINE_NEW` 內嵌 `.onnx` 權重編譯出單一 `MetaVisionAOI.dll`，附送 `MetaVisionAOI.h` / `MetaVisionAOI.cs` / `metavision_aoi.py`，並以與 Python 版一致的測試圖驗證推論數值與座標一致（且於乾淨環境驗證無外部 DLL 依賴）。
 2. 清理開發期暫存圖與敏感測試資料（絕不打包 `projects_registry.json` 或其他客戶資料）。
 3. 驗測交付包正常運作後，將 `CODER/CODER.md` 標頭更新為 `- **Status**: \`CLOSED\``，向 Manager 回報結案完成。

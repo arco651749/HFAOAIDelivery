@@ -8,13 +8,14 @@
 
 ---
 
-## 一、 團隊四份 SOP 對應總覽
+## 一、 團隊五份 SOP 對應總覽
 
 | 角色 | Subagent / 對象 | 專屬 SOP | 專責目錄與進度檔 |
 | :--- | :--- | :--- | :--- |
 | **👔 專案經理 (Manager)** | 主控 Agent | [AI_MANAGER_SOP.md](./AI_MANAGER_SOP.md) | `pending_requests/`、`projects_registry.json`、`request_audit_log.jsonl`、`projects/<帳號>/STATE.json` |
 | **🔍 系統分析師 (Analyst)** | `aoi_analyst` | [AI_ANALYST_SOP.md](./AI_ANALYST_SOP.md) | `projects/<帳號>/ANALYST/`（唯一主檔 `ANALYST.md` ＋ `attachments/<YYYY-MM-DD>/`） |
 | **💻 演算法工程師 (Coder)** | `aoi_coder` | [AI_CODER_SOP.md](./AI_CODER_SOP.md) | `projects/<帳號>/CODER/`（`CODER.md`、`detector_dev.py`、`detector.py`、`eval_outputs/`） |
+| **🛡️ 品質審查員 (QA)** | `aoi_qa` | [AI_QA_SOP.md](./AI_QA_SOP.md) | 唯讀獨立審查 `ANALYST/` 與 `CODER/`，僅回傳 `PASS / REJECT` 精簡報告（不改檔、不佔主控 Context） |
 | **👨‍💼 客戶 (Client)** | 真實客戶 / `aoi_client` | [CLIENT_SOP.md](./CLIENT_SOP.md) | 透過網頁三分頁操作，寫入 `data/`、`ANALYST/`、`test_uploads/` |
 
 ---
@@ -105,11 +106,20 @@ $env:HF_TOKEN="<若需同步HF才填>"; python d:\AntiGravity\HFAOAIDelivery\app
 
 ---
 
-## 五、 客戶通知管道與標準文案範本
+## 五、 通知管道（導演 Telegram 即時推播 & 客戶 Gmail 通知）
 
-`manage_project.py approve` 僅於終端機輸出帳號密碼，**不會自動寄信**。Manager 須依環境採以下通知方式：
-- **真實外部客戶**：透過 Google Workspace Gmail 建立草稿（`gmail_create_draft`）供人類導演確認寄出，或直接於對話產出標準文案交由人類導演轉發。
-- **系統內部模擬測試 (`aoi_client`)**：直接將網址、帳號、密碼與階段任務透過 Subagent Prompt 傳遞給 `aoi_client`。
+`manage_project.py approve` 僅於終端機輸出帳號密碼，**不會自動發送通知**。Manager 依對象採雙軌通知：
+- **通知人類導演（Telegram 即時推播，手機秒跳 —— 鐵則：有事就發 Telegram！）**：
+  - 使用本專案專屬 Bot `@HFAOAIDelivery_bot`（Token 與 Chat ID 存於本機私密檔 `AGENTS.md`，不入 Git）。
+  - **觸發時機（強制）**：只要有任何需要導演確認、拍板、回覆、排錯或介入的事項——包含三大閘道（閘道 0 新開案 / 閘道 1 待 `SPEC_FROZEN` / 閘道 2 待 Review）、客戶新回覆或新錯判回饋、長時訓練完成、環境/程式異常卡關、或需導演做決定時——**一律**執行：
+    ```powershell
+    python d:\AntiGravity\HFAOAIDelivery\notify_director.py "🚦【閘道/事件】客戶 <客戶名稱> / 專案 <客戶專案> (<客戶名稱>-<客戶專案>)：<重點摘要>"
+    ```
+  - **必含欄位**：每則推播皆須清楚標明**客戶名稱與專案名稱**，方便多專案同時進行時一眼辨識。
+- **通知真實外部客戶（官方 `gmail` Plugin CLI —— 鐵則：有進度就主動發信通知客戶！）**：
+  - 已獲導演授權直接寄信通知客戶（使用 `gmail mutate send --md --body-file ...`，收件人取自 `projects_registry.json` 之 `email` 欄位）。
+  - **觸發里程碑（強制）**：① 開通帳密（`WAITING_UPLOAD`）② 分析師發布確認問題（`WAITING_CLIENT_QA`）③ 規格定案開工訓練（`SPEC_FROZEN` → `CODING`）④ 演算法上線／升版開放盲測（`DEPLOYED`）⑤ 專案結案交付（`CLOSED`）。
+- **系統內部模擬測試 (`aoi_client`)**：直接將網址、帳號、密碼與階段任務透過 Subagent Prompt 或 Desktop Cockpit 傳遞測試。
 
 ### 標準通知文案範本
 1. **開通帳號通知**：
@@ -118,25 +128,33 @@ $env:HF_TOKEN="<若需同步HF才填>"; python d:\AntiGravity\HFAOAIDelivery\app
 2. **開工前問題確認通知**：
    > 主旨：`[MetaVision AOI] <帳號> 樣本分析完成，請至分頁二確認細節`
    > 內容：分析師已完成樣本檢視，請登入 `https://www.metavisionsystems.com` 切換至「分頁二 (Discuss)」回覆待確認問題（可附上補充圖片或文件）。
-3. **線上盲測開放通知**：
+3. **規格定案開工通知**：
+   > 主旨：`[MetaVision AOI] <帳號> 規格已確認定案，演算法訓練進行中`
+   > 內容：感謝您確認需求細節！規格已正式定案，工程師正進行標註、模型訓練與效能驗證；完成審查上線後我們將第一時間發信通知您進行線上盲測。
+4. **線上盲測開放／升版通知**：
    > 主旨：`[MetaVision AOI] <帳號> 演算法 <版本號> 已上線，歡迎進行線上盲測`
    > 內容：請登入 `https://www.metavisionsystems.com` 切換至「分頁三」進行單張診斷或整批盲測並下載 Excel 報表。
+5. **專案驗收結案通知**：
+   > 主旨：`[MetaVision AOI] <帳號> 專案已驗收結案與交付`
+   > 內容：感謝合作！最終版本 `<版本號>` 已完成交付封存，若後續有新增料號或優化需求歡迎隨時聯繫。
 
 ---
 
-## 六、 Manager 初審檢查清單 (Quality Gate)
+## 六、 獨立 QA 初審檢查清單 (Quality Gate — 委派獨立 Subagent 執行)
 
-在把 Subagent 成果呈報給人類導演前，Manager **必須先自行核對**：
+> **💡 Context Window 保護原則**：為避免大量原圖、檢視對比圖與程式碼塞爆主控 Manager 的 Context Window，**初審作業一律委派獨立 QA 審查 Subagent（`aoi_qa`）執行**（只讀不改檔，執行完僅回傳精簡 `PASS / REJECT` 結論、量化摘要與不合格項目清單給 Manager）。
+
+在把 Subagent 成果呈報給人類導演前，Manager 委派 `aoi_qa` 逐項核對：
 
 1. **審查 `aoi_analyst` 回報**：
    - [ ] 沒有新增或修改任何 `.py` 檔或 `STATE.json`？
-   - [ ] 確實用 `read_file` 看過訓練樣本圖片（而非只憑檔名臆測）？
+   - [ ] 確實看過訓練樣本圖片（而非只憑檔名臆測）？
    - [ ] `ANALYST/ANALYST.md` 保留全部三個 HTML 標記（`CLIENT_QUESTIONS_START/END`、`DISCUSS_LOG_START`），且 `DISCUSS_LOG_START` 位於檔尾最後一節？
    - [ ] `- **Status**: \`PENDING_DIRECTOR_REVIEW\`` 格式正確？
 2. **審查 `aoi_coder` 回報**：
    - [ ] 僅在 `SPEC_FROZEN` 之後開工，且未直接覆寫正在線上服務客戶的 `CODER/detector.py`（未過 Review 前僅修改 `CODER/detector_dev.py`）？
-   - [ ] 程式碼完全避開 Windows 中文路徑地雷（無 `cv2.imread`/`cv2.imwrite`），且 `detect_image` 回傳原生 Python 型別、`len(row_values) == len(REPORT_HEADERS) - 1`、單張 CPU 耗時 `< 0.4 秒`？
-   - [ ] `CODER/CODER.md` 標頭為 `- **Status**: \`DIRECTOR_REVIEW\``，附有完整量化數據與 `CODER/eval_outputs/` 對比圖？
+   - [ ] 程式碼完全避開 Windows 中文路徑地雷（無 `cv2.imread`/`cv2.imwrite`），獨立執行 `py_compile` 與實測驗證 `detect_image` 回傳原生 Python 型別、`len(row_values) == len(REPORT_HEADERS) - 1`、純 CPU 單張耗時符合 `ANALYST.md` 紅線（預設 `< 1.0 秒` / 目標 `< 0.4 秒`）？
+   - [ ] 逐張目視抽查 `CODER/eval_outputs/` 檢視對比圖（確認中文字體無亂碼、框體貼合、計數正確、無露邊誤檢），並確認 `CODER/CODER.md` 標頭為 `- **Status**: \`DIRECTOR_REVIEW\`` 且與 `ANALYST.md` 規格一致？
 
 ---
 

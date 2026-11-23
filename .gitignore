@@ -6,7 +6,8 @@ __pycache__/
 venv/
 .env
 
-# 客戶帳密、申請與稽核日誌（嚴禁上傳）
+# 客戶帳密、申請、稽核日誌與本機專屬設定（嚴禁上傳）
+AGENTS.md
 projects_registry.json
 request_audit_log.jsonl
 pending_requests/
@@ -16,6 +17,7 @@ projects/
 data/
 *.zip
 demo_assets/
+test_logs/
 IO_FLOW_DEMO.html
 build_io_demo.py
 
