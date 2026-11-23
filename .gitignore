@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# 客戶帳密、申請與稽核日誌（嚴禁上傳）
+projects_registry.json
+request_audit_log.jsonl
+pending_requests/
+
+# 客戶專案資料、圖片與測試檔（嚴禁上傳）
+projects/
+data/
+*.zip
+demo_assets/
+IO_FLOW_DEMO.html
+build_io_demo.py
+
+# 作業系統雜檔
+.DS_Store
+Thumbs.db
