@@ -30,27 +30,13 @@ from PIL import Image
 BASE_DIR = Path(__file__).parent.resolve()
 TMP_REVIEW_ROOT = BASE_DIR / "_agy_review_tmp"
 REVIEWER_SOP_PATH = BASE_DIR / "AI_REVIEWER_SOP.md"
-DEFAULT_AGY_MODEL = os.getenv("AGY_REVIEW_MODEL", "gemini-4-hydrogen-low")
+AGY_REVIEW_MODEL = "gemini-4-hydrogen-low"
 MAX_CONCURRENT_AGY = threading.Semaphore(2)
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def _read_env_var(name: str, default: str = "") -> str:
-    val = (os.getenv(name) or "").strip()
-    if val:
-        return val
-    env_file = BASE_DIR / ".env"
-    if env_file.exists():
-        try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                if line.startswith(f"{name}="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-        except Exception:
-            pass
-    return default
+    return (os.getenv(name) or "").strip() or default
 
 
 def find_agy_binary() -> str | None:
@@ -133,7 +119,7 @@ def _run_local_agy_on_files(
     if not agy_bin:
         return False, "", "🤖 本機未偵測到 `agy.exe`，AGY 視覺覆核員暫時離線，請直接參考上方純程式判定結果。"
 
-    use_model = (model or _read_env_var("AGY_REVIEW_MODEL", DEFAULT_AGY_MODEL)).strip() or DEFAULT_AGY_MODEL
+    use_model = (model or AGY_REVIEW_MODEL).strip() or AGY_REVIEW_MODEL
     cmd = [
         agy_bin,
         "-p",
@@ -225,7 +211,7 @@ def _call_remote_bridge(
         with urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
         if data.get("ok"):
-            return True, str(data.get("model", DEFAULT_AGY_MODEL)), str(data.get("review_md", ""))
+            return True, str(data.get("model", AGY_REVIEW_MODEL)), str(data.get("review_md", ""))
         return False, str(data.get("model", "")), str(data.get("error", "遠端 AGY 覆核回傳失敗"))
     except urllib.error.URLError:
         return False, "", "🤖 本機 AGY 視覺覆核員目前離線中（無法連線回主機），請直接參考上方純程式判定結果。"
@@ -396,7 +382,7 @@ def create_agy_bridge_router() -> APIRouter:
             {
                 "agy_available": find_agy_binary() is not None,
                 "bridge_enabled": bool(_read_env_var("AGY_BRIDGE_TOKEN")),
-                "model": _read_env_var("AGY_REVIEW_MODEL", DEFAULT_AGY_MODEL),
+                "model": AGY_REVIEW_MODEL,
             }
         )
 
