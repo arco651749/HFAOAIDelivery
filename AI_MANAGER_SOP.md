@@ -8,7 +8,7 @@
 
 ---
 
-## 一、 團隊五份 SOP 對應總覽
+## 一、 團隊六份 SOP 對應總覽
 
 | 角色 | Subagent / 對象 | 專屬 SOP | 專責目錄與進度檔 |
 | :--- | :--- | :--- | :--- |
@@ -16,6 +16,7 @@
 | **🔍 系統分析師 (Analyst)** | `aoi_analyst` | [AI_ANALYST_SOP.md](./AI_ANALYST_SOP.md) | `projects/<帳號>/ANALYST/`（唯一主檔 `ANALYST.md` ＋ `attachments/<YYYY-MM-DD>/`） |
 | **💻 演算法工程師 (Coder)** | `aoi_coder` | [AI_CODER_SOP.md](./AI_CODER_SOP.md) | `projects/<帳號>/CODER/`（`CODER.md`、`detector_dev.py`、`detector.py`、`eval_outputs/`） |
 | **🛡️ 品質審查員 (QA)** | `aoi_qa` | [AI_QA_SOP.md](./AI_QA_SOP.md) | 唯讀獨立審查 `ANALYST/` 與 `CODER/`，僅回傳 `PASS / REJECT` 精簡報告（不改檔、不佔主控 Context） |
+| **👁️ 客戶覆核解說員 (Reviewer)** | `aoi_reviewer` (`agy_reviewer.py`) | [AI_REVIEWER_SOP.md](./AI_REVIEWER_SOP.md) | 由網頁分頁三呼叫本機 `agy.exe --sandbox`（本機與未來 HF Space 均回呼本機），細心目視覆核盲測圖並親切解說給客戶（不偷改純程式判定） |
 | **👨‍💼 客戶 (Client)** | 真實客戶 / `aoi_client` | [CLIENT_SOP.md](./CLIENT_SOP.md) | 透過網頁三分頁操作，寫入 `data/`、`ANALYST/`、`test_uploads/` |
 
 ---

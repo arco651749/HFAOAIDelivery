@@ -9,7 +9,6 @@ MetaVision AOI 多專案協作與驗收平台 (Gradio)
 """
 
 import importlib.util
-import io
 import json
 import os
 import re
@@ -29,14 +28,8 @@ from fastapi import FastAPI
 from huggingface_hub import HfApi
 from PIL import Image
 
+from agy_reviewer import create_agy_bridge_router, review_batch, review_single
 from mcp_server import create_mcp_router
-
-try:
-    from google import genai
-    from google.genai import types as genai_types
-except Exception:
-    genai = None
-    genai_types = None
 
 # === 全域路徑與設定 ===
 BASE_DIR = Path(__file__).parent.resolve()
@@ -679,24 +672,8 @@ def run_single_test(project_id: str | None, image: Image.Image | None):
         image,
         Image.fromarray(vis_rgb),
         str(res.get("summary_label", "")),
-        "💡 純程式已完成毫秒級判定。點擊 **「🤖 請 AI 視覺覆核這張」** 可由 AI 對比原圖與標註圖檢查是否疑似漏檢或誤判（僅供覆核解說，絕不改動純程式結果）。",
+        "💡 純程式已完成毫秒級判定。點擊 **「🤖 請 AGY 視覺覆核這張」** 可由本機 Antigravity 覆核員 (`aoi_reviewer`) 對比原圖與標註圖細心檢查，並說明後續處理方式（絕不改動純程式結果）。",
     )
-
-
-def _get_google_api_key() -> str:
-    key = (os.getenv("GOOGLE_API_KEY") or "").strip()
-    if key:
-        return key
-    env_file = BASE_DIR / ".env"
-    if env_file.exists():
-        try:
-            for line in env_file.read_text(encoding="utf-8").splitlines():
-                line = line.strip()
-                if line.startswith("GOOGLE_API_KEY="):
-                    return line.split("=", 1)[1].strip().strip('"').strip("'")
-        except Exception:
-            pass
-    return ""
 
 
 def _read_spec_brief(project_id: str, max_chars: int = 2200) -> str:
@@ -709,38 +686,6 @@ def _read_spec_brief(project_id: str, max_chars: int = 2200) -> str:
         return ""
 
 
-def _pil_to_jpeg_bytes(img: Image.Image, max_width: int = 1024, quality: int = 86) -> bytes:
-    rgb = img.convert("RGB")
-    if rgb.width > max_width:
-        nh = int(rgb.height * (max_width / rgb.width))
-        rgb = rgb.resize((max_width, max(1, nh)), Image.Resampling.LANCZOS)
-    buf = io.BytesIO()
-    rgb.save(buf, format="JPEG", quality=quality)
-    return buf.getvalue()
-
-
-def _call_gemini_vision(parts: list) -> tuple[bool, str, str]:
-    """呼叫 Gemini 多模態視覺覆核（具自動備援模型鏈，嚴格僅作覆核解說、不修改純程式判定）。"""
-    if genai is None or genai_types is None:
-        return False, "", "⚠️ 本機尚未安裝 `google-genai` 套件，AI 視覺覆核員暫時離線，請直接參考上方純程式判定結果。"
-    api_key = _get_google_api_key()
-    if not api_key:
-        return False, "", "⚠️ 未設定 `GOOGLE_API_KEY`（環境變數或本機 `.env`），AI 視覺覆核員離線中，請直接參考上方純程式判定結果。"
-
-    client = genai.Client(api_key=api_key)
-    last_err = ""
-    for model_name in ("gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"):
-        try:
-            resp = client.models.generate_content(model=model_name, contents=parts)
-            text = (getattr(resp, "text", None) or "").strip()
-            if text:
-                return True, model_name, text
-        except Exception as exc:
-            last_err = str(exc)
-            continue
-    return False, "", f"⚠️ AI 視覺覆核暫時忙碌或連線失敗（請直接參考純程式判定結果）。\n\n`{last_err[:240]}`"
-
-
 def run_single_ai_review(
     project_id: str | None,
     orig_img: Image.Image | None,
@@ -750,71 +695,16 @@ def run_single_ai_review(
     if not project_id:
         return "⚠️ 請先登入專案帳號。"
     if orig_img is None or vis_img is None:
-        return "⚠️ 請先於上方拖入一張圖片並完成純程式檢測後，再執行 AI 視覺覆核。"
-
-    spec_brief = _read_spec_brief(project_id)
-    prompt = (
-        f"你是 MetaVision AOI 獨立視覺覆核員（僅負責幫客戶目視核對純程式的標註有沒有疑似漏檢、過殺或分類錯誤，絕不改動純程式結果）。\n"
-        f"專案：`{project_id}`｜純程式判定摘要：`{pred_summary}`\n"
-        f"專案規格摘要：\n{spec_brief}\n\n"
-        "以下依序附上兩張圖：① 原始圖片、② 純程式標註結果圖。\n"
-        "請用精簡繁體中文條列回覆：\n"
-        "1. **覆核結論**：`✅ 看起來正確` 或 `⚠️ 疑似有誤（建議按回報修正）`\n"
-        "2. **目視核對重點**：檢查目標顆數、類別是否吻合（注意大小差異、強反光、綠墊/棧板並存、露邊是否誤框）\n"
-        "3. **建議回報說明**（僅在疑似有誤時給出一句可直接貼進「回報修正」欄的具體描述）。"
-    )
-    parts = [
-        genai_types.Part.from_bytes(data=_pil_to_jpeg_bytes(orig_img), mime_type="image/jpeg"),
-        genai_types.Part.from_bytes(data=_pil_to_jpeg_bytes(vis_img), mime_type="image/jpeg"),
-        prompt,
-    ]
-    t0 = time.perf_counter()
-    ok, model_used, text = _call_gemini_vision(parts)
-    dt = time.perf_counter() - t0
-    if not ok:
-        return text
-    return f"#### 🤖 AI 視覺覆核報告（模型：`{model_used}`｜耗時 `{dt:.1f}s`｜僅供覆核參考，不改原判定）\n\n{text}"
+        return "⚠️ 請先於上方拖入一張圖片並完成純程式檢測後，再執行 AGY 視覺覆核。"
+    return review_single(project_id, orig_img, vis_img, pred_summary, _read_spec_brief(project_id))
 
 
 def run_batch_ai_review(project_id: str | None, batch_items: list[dict] | None) -> str:
     if not project_id:
         return "⚠️ 請先登入專案帳號。"
     if not batch_items:
-        return "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AI 整批覆核。"
-
-    max_imgs = 12
-    selected = batch_items[:max_imgs]
-    spec_brief = _read_spec_brief(project_id)
-    table_lines = "\n".join(
-        f"- 圖 {i+1}｜檔名：`{it['name']}`｜純程式判定：`{it['summary']}`"
-        for i, it in enumerate(selected)
-    )
-    prompt = (
-        f"你是 MetaVision AOI 獨立視覺覆核員。以下附上專案 `{project_id}` 整批盲測的 {len(selected)} 張「純程式標註結果圖」（順序對應下方清單）。\n"
-        f"純程式判定清單：\n{table_lines}\n\n"
-        f"專案規格摘要：\n{spec_brief}\n\n"
-        "請逐張仔細看圖核對標註框、類別與數量，用繁體中文輸出：\n"
-        "1. **整批覆核總結**（共檢視幾張、幾張看似正確、哪幾張疑似有誤）\n"
-        "2. **逐張覆核表**（Markdown 表格：`檔名 | 純程式判定 | AI 覆核(✅/⚠️) | 目視觀察與疑似問題`）\n"
-        "3. 若有疑似漏檢、過殺、分類錯誤或框偏，請明確點出是哪一張、建議客戶轉到模式 A 按回報修正。"
-    )
-    parts: list = []
-    for idx, it in enumerate(selected):
-        vp = Path(it["vis_path"])
-        if not vp.exists():
-            continue
-        with Image.open(vp) as im:
-            parts.append(f"【圖 {idx+1}：{it['name']}（純程式：{it['summary']}）】")
-            parts.append(genai_types.Part.from_bytes(data=_pil_to_jpeg_bytes(im, max_width=960, quality=82), mime_type="image/jpeg"))
-    parts.append(prompt)
-
-    t0 = time.perf_counter()
-    ok, model_used, text = _call_gemini_vision(parts)
-    dt = time.perf_counter() - t0
-    if not ok:
-        return text
-    extra = f"\n\n*(註：本批共 {len(batch_items)} 張，本次 AI 抽檢前 {len(selected)} 張。)*" if len(batch_items) > max_imgs else ""
-    return f"#### 🤖 AI 整批視覺覆核報告（模型：`{model_used}`｜耗時 `{dt:.1f}s`｜僅供覆核參考，不改 Excel 結果）\n\n{text}{extra}"
+        return "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AGY 整批覆核。"
+    return review_batch(project_id, batch_items, _read_spec_brief(project_id))
 
 
 def report_misjudgment(
@@ -1168,7 +1058,7 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                         cached_pred = gr.State("")
 
                         with gr.Row():
-                            btn_single_ai = gr.Button("🤖 請 AI 視覺覆核這張（抓疑似漏檢／誤判，不改原判定）", variant="secondary")
+                            btn_single_ai = gr.Button("🤖 請 AGY 視覺覆核這張（抓疑似漏檢／誤判，不改原判定）", variant="secondary")
                         single_ai_review = gr.Markdown()
 
                         test_input.change(
@@ -1203,7 +1093,7 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                         )
                         with gr.Row():
                             btn_batch = gr.Button("🚀 開始整批掃描", variant="primary")
-                            btn_batch_ai = gr.Button("🤖 請 AI 視覺覆核整批結果（自動揪出疑似錯判圖）", variant="secondary")
+                            btn_batch_ai = gr.Button("🤖 請 AGY 視覺覆核整批結果（自動揪出疑似錯判圖）", variant="secondary")
                         batch_summary = gr.Markdown()
                         batch_ai_review = gr.Markdown()
                         cached_batch_items = gr.State([])
@@ -1249,9 +1139,10 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
         outputs=[current_project, login_msg, auth_panel, main_panel],
     )
 
-# === FastAPI + Remote MCP (/mcp) + Gradio 單一入口整合 ===
+# === FastAPI + Remote MCP (/mcp) + AGY Bridge (/api/agy-review) + Gradio 單一入口整合 ===
 fastapi_app = FastAPI(title="MetaVision AOI Portal & Remote MCP")
 fastapi_app.include_router(create_mcp_router(sys.modules[__name__]))
+fastapi_app.include_router(create_agy_bridge_router())
 fastapi_app = gr.mount_gradio_app(fastapi_app, demo, path="/")
 
 
