@@ -59,7 +59,7 @@ projects/<客戶名稱>-<客戶專案>/
 | :--- | :--- | :--- | :--- |
 | **Python（線上開發與雲端盲測 `detector_dev.py` / `detector.py`）** | `opencv-python` (`cv2` ≥ 5.1)、`numpy`、`zxing-cpp`（DataMatrix / QR / 1D 工業全碼讀取）、`Pillow`（僅用於繪製中文標註字體與寫入 PNG `iTXt`） | **🏆 主力首選：`cv2.dnn` (`OpenCV 5.1 ENGINE_AUTO / ENGINE_OPENCV`)**<br>*(訓練匯出 `.onnx` 固定採 `dynamic=False` + `opset=12~17`；開發期一律以 `np.fromfile(path, np.uint8)` 讀入 Buffer 並實測 `cv2.dnn.readNetFromONNX(buf)`，兼顧 Windows 中文路徑安全與提早驗證算子相容性！)*<br>🥈 僅遇極少數冷門不支援算子或需 GPU 加速時才退用 `onnxruntime`<br>*(註：`ultralytics` / `torch` **僅限訓練與匯出 `.onnx` 腳本**，嚴禁在 `detector.py` 推論路徑中 `import`)* | 嚴禁在推論主流程使用 `scipy`、`scikit-image`、`scikit-learn`、`pandas`、`torch`、`pyzbar` 等難以平轉 C++ 靜態編譯或不支援 DataMatrix 之套件 |
 | **C++（單檔原生 DLL 核心引擎 `MetaVisionAOI.dll`）** | **統一安裝於 `D:\opencv5_static` 之靜態 `/MT` 套件庫**：`OpenCV 5.1`（`core`、`imgproc`、`imgcodecs`、`dnn`、`geometry`、`flann`）＋ **`zxing-cpp` (`ZXing.lib`)**（DataMatrix / QR / 全條碼靜態讀碼） | **同一套 `OpenCV 5.1 cv::dnn (ENGINE_AUTO / ENGINE_OPENCV)` 直接吃 Win32 `RCDATA` 內嵌 `.onnx` 記憶體指標**（免綁 `ncnn`、免外帶 `onnxruntime.dll`、免額外模型格式轉換；僅 GPU / 冷門算子案選配 `ENGINE_ORT`） | 嚴禁使用 `/MD` 動態 CRT（防客戶端缺少 `vcruntime140.dll`）、嚴禁依賴 Python/CUDA Runtime 作為 CPU 單檔預設前提 |
-| **C# / C++ / Python 客戶端呼叫層** | 客戶端自備影像來源（`OpenCvSharp` / `Bitmap` / `cv::Mat` / `numpy`），直接傳入 **連續記憶體指標（1=GRAY / 3=BGR / 4=BGRA）** 或 **UTF-8 圖檔路徑** | **無須安裝任何 OpenCV、AI 或 VC++ 執行環境** | 不強迫客戶端綁定特定 OpenCV 或 .NET 版本 |
+| **C# / C++ / Python 客戶端呼叫層** | 客戶端自備影像來源（`OpenCvSharp` / `Bitmap` / `cv::Mat` / `numpy`），直接傳入 **連續記憶體指標（`GRAY8` / `BGR8` / `BGRA8` / `GRAY16` / `BGR16` / `FLOAT32`）** 或 **UTF-8 圖檔路徑** | **無須安裝任何 OpenCV、AI 或 VC++ 執行環境** | 不強迫客戶端綁定特定 OpenCV 或 .NET 版本 |
 
 ### 3.2 單一原生 DLL 零安裝靜態編譯規範（Windows x64 + OpenCV 5.1）
 欲達成「**客戶只拿到 1 顆 `.dll`，不用裝 OpenCV、不用裝 Python、不用裝 ONNX Runtime、連 Microsoft Visual C++ Redistributable 都不用裝**」，編譯時必須遵守：
@@ -87,7 +87,7 @@ projects/<客戶名稱>-<客戶專案>/
    - 一律透過 **Win32 Resource (`.rc` `RCDATA`)** 將 `.onnx`（可做 XOR/AES 混淆）直接打包進 `MetaVisionAOI.dll`，執行期以 `FindResourceW` / `LoadResource` / `LockResource` 取得記憶體指標與長度，直接傳入 `cv::dnn::readNetFromONNX(ptr, size)`（預設 `ENGINE_AUTO` 即啟用 OpenCV 5.1 新圖引擎）——依然 **100% 單一 `.dll`**、3 秒編完且零記憶體拷貝。
 
 ### 3.3 統一跨語言 C ABI 匯出介面 (`extern "C"`)
-所有單檔 DLL 一律匯出純 C ABI（零 C++ Name Mangling、零 STL 跨邊界問題），輸入支援「記憶體連續影像指標（GRAY/BGR/BGRA）」與「UTF-8 圖檔路徑」，輸出統一為 **UTF-8 JSON 字串**：
+所有單檔 DLL 一律匯出純 C ABI（零 C++ Name Mangling、零 STL 跨邊界問題），輸入支援「記憶體連續影像指標（涵蓋 8-bit 灰階/彩色、**16-bit 工業高動態灰階與深度圖**、32-bit 浮點高度圖）」與「UTF-8 圖檔路徑」，輸出統一為 **UTF-8 JSON 字串**：
 
 ```c
 // MetaVisionAOI.h — 跨語言統一 C ABI 合約（C++ / C# P/Invoke / Python ctypes 共用）
@@ -101,6 +101,16 @@ projects/<客戶名稱>-<客戶專案>/
   #define MV_API
 #endif
 
+// 統一像素格式列舉（原生涵蓋 8-bit、16-bit 工業相機/深度圖、32-bit 線雷射高度圖）
+typedef enum MV_PixelFormat {
+    MV_PIX_GRAY8   = 1,   // 8-bit  單通道灰階 (CV_8UC1,  1 byte/px)
+    MV_PIX_BGR8    = 3,   // 8-bit  三通道 BGR (CV_8UC3,  3 bytes/px)
+    MV_PIX_BGRA8   = 4,   // 8-bit  四通道 BGRA(CV_8UC4,  4 bytes/px，相容 C# 32bpp Bitmap)
+    MV_PIX_GRAY16  = 11,  // 16-bit 單通道無號 (CV_16UC1, 2 bytes/px，Mono10/12/16 與 Depth16)
+    MV_PIX_BGR16   = 13,  // 16-bit 三通道 BGR (CV_16UC3, 6 bytes/px)
+    MV_PIX_FLOAT32 = 31   // 32-bit 單通道浮點 (CV_32FC1, 4 bytes/px，3D 雷射高度圖)
+} MV_PixelFormat;
+
 extern "C" {
     // 0. 查詢 SDK 與專案模型版本（回傳靜態常數字串，免釋放）
     MV_API const char* MV_GetVersion(void);
@@ -109,22 +119,23 @@ extern "C" {
     MV_API void* MV_Create(const char* config_json);
 
     // 2. 記憶體影像直接推論（推薦產線相機零寫碟高速呼叫）
-    //    channels: 1=GRAY, 3=BGR, 4=BGRA（相容工業黑白相機與 C# 32bpp Bitmap）
-    //    stride: 每列位元組數（傳 0 視為緊湊 width * channels）
+    //    img_data: 影像資料起始指標（void* 直接相容 uint8* / uint16* / float* / C# IntPtr）
+    //    pixel_format: 見 MV_PixelFormat 列舉（GRAY8/BGR8/BGRA8/GRAY16/BGR16/FLOAT32）
+    //    stride: 每列位元組數 bytes（傳 0 視為緊湊 width * bytes_per_pixel）
     //    回傳值：0=成功；>0=out_json_buf 空間不足（回傳所需位元組數，含結尾 '\0'）；<0=錯誤碼
     MV_API int MV_Detect(
         void* handle,
-        const unsigned char* img_data,
+        const void* img_data,
         int width,
         int height,
-        int channels,
+        int pixel_format,
         int stride,
         char* out_json_buf,
         int buf_size
     );
 
-    // 3. UTF-8 檔案路徑推論（支援 Windows 中文路徑）
-    //    實作細則：內部必以 MultiByteToWideChar(CP_UTF8) + _wfopen 讀入記憶體再 cv::imdecode，嚴禁 cv::imread
+    // 3. UTF-8 檔案路徑推論（支援 Windows 中文路徑，保留原位元深度如 16-bit PNG/TIFF）
+    //    實作細則：內部必以 MultiByteToWideChar(CP_UTF8) + _wfopen 讀入記憶體再 cv::imdecode(buf, IMREAD_UNCHANGED)，嚴禁 cv::imread
     MV_API int MV_DetectFile(
         void* handle,
         const char* utf8_image_path,
