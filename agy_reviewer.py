@@ -1,11 +1,13 @@
 """
 MetaVision AOI — AGY 獨立視覺覆核引擎 (agy_reviewer.py)
-- 本機模式：直接呼叫本機 `agy.exe`（沙盒唯讀 `--sandbox`，免 GOOGLE_API_KEY，直接走 Antigravity 額度）對比原圖與標註圖做視覺覆核。
+- 本機模式：以可中斷 `subprocess.Popen` 呼叫本機 `agy.exe`（沙盒唯讀 `--sandbox`，免 GOOGLE_API_KEY，直接走 Antigravity 額度）對比原圖與標註圖做視覺覆核。
+- 即時取消與防洩漏：支援 `cancel_event`，當客戶關閉瀏覽器分頁（GeneratorExit）、重新上傳新圖、或遠端斷線時，於 0.2 秒內透過 Windows `taskkill /F /T /PID` 秒殺整棵 `agy.exe` 子行程樹並回收暫存檔，絕不白燒額度。
 - 雲端橋接模式（未來部署於 Hugging Face Space 時）：設定環境變數 `AGY_BRIDGE_URL` + `AGY_BRIDGE_TOKEN`，雲端點按鈕後自動透過 HTTPS 將縮圖與摘要回傳至本機 `/api/agy-review` 呼叫本機 `agy.exe`；若本機關機或離線則優雅提示「AGY 覆核員離線中」，絕不影響純程式檢測。
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hmac
 import io
@@ -28,8 +30,9 @@ from PIL import Image
 BASE_DIR = Path(__file__).parent.resolve()
 TMP_REVIEW_ROOT = BASE_DIR / "_agy_review_tmp"
 REVIEWER_SOP_PATH = BASE_DIR / "AI_REVIEWER_SOP.md"
-DEFAULT_AGY_MODEL = os.getenv("AGY_REVIEW_MODEL", "gemini-3.8-flash-low")
+DEFAULT_AGY_MODEL = os.getenv("AGY_REVIEW_MODEL", "gemini-4-hydrogen-low")
 MAX_CONCURRENT_AGY = threading.Semaphore(2)
+CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
 def _read_env_var(name: str, default: str = "") -> str:
@@ -77,11 +80,54 @@ def pil_to_jpeg_bytes(img: Image.Image, max_width: int = 1024, quality: int = 86
     return buf.getvalue()
 
 
+def _terminate_proc_tree(proc: subprocess.Popen) -> None:
+    """強制終止 agy.exe 及其所有子行程（Windows 採 taskkill /F /T /PID 防孤兒行程）。"""
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                creationflags=CREATE_NO_WINDOW,
+            )
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+    try:
+        if proc.poll() is None:
+            proc.kill()
+        proc.wait(timeout=3)
+    except Exception:
+        pass
+
+
+def _acquire_slot_cancellable(
+    cancel_event: threading.Event | None,
+    wait_limit: float = 20.0,
+) -> tuple[bool, bool]:
+    """回傳 (acquired, cancelled)。等待併發名額期間若觸發取消則立即放棄，不啟動 agy.exe。"""
+    deadline = time.perf_counter() + wait_limit
+    while time.perf_counter() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            return False, True
+        if MAX_CONCURRENT_AGY.acquire(timeout=0.2):
+            if cancel_event is not None and cancel_event.is_set():
+                MAX_CONCURRENT_AGY.release()
+                return False, True
+            return True, False
+    return False, False
+
+
 def _run_local_agy_on_files(
     work_dir: Path,
     prompt: str,
     model: str | None = None,
     timeout_sec: int = 150,
+    cancel_event: threading.Event | None = None,
 ) -> tuple[bool, str, str]:
     agy_bin = find_agy_binary()
     if not agy_bin:
@@ -104,36 +150,56 @@ def _run_local_agy_on_files(
         str(work_dir),
     ]
 
-    acquired = MAX_CONCURRENT_AGY.acquire(timeout=15)
+    acquired, cancelled = _acquire_slot_cancellable(cancel_event, wait_limit=20.0)
+    if cancelled:
+        return False, use_model, "🛑 已取消本次 AGY 視覺覆核。"
     if not acquired:
         return False, use_model, "⏳ AGY 視覺覆核員目前忙碌中（已有其他覆核任務執行中），請稍後再試。"
 
+    stdout_path = work_dir / "_agy_stdout.txt"
+    stderr_path = work_dir / "_agy_stderr.txt"
+    proc: subprocess.Popen | None = None
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(work_dir),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout_sec + 15,
-            creationflags=0x08000000 if os.name == "nt" else 0,  # CREATE_NO_WINDOW
-        )
-        out = (proc.stdout or "").strip()
-        err = (proc.stderr or "").strip()
-        if proc.returncode == 0 and out:
+        with open(stdout_path, "wb") as f_out, open(stderr_path, "wb") as f_err:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=str(work_dir),
+                stdin=subprocess.DEVNULL,
+                stdout=f_out,
+                stderr=f_err,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            deadline = time.perf_counter() + timeout_sec + 15
+            while proc.poll() is None:
+                if cancel_event is not None and cancel_event.is_set():
+                    _terminate_proc_tree(proc)
+                    return False, use_model, "🛑 已取消先前的 AGY 視覺覆核任務。"
+                if time.perf_counter() > deadline:
+                    _terminate_proc_tree(proc)
+                    return False, use_model, "⏳ 本機 AGY 視覺覆核逾時，請直接參考上方純程式判定結果。"
+                time.sleep(0.2)
+
+        rc = proc.returncode
+        out = stdout_path.read_text(encoding="utf-8", errors="replace").strip() if stdout_path.exists() else ""
+        err = stderr_path.read_text(encoding="utf-8", errors="replace").strip() if stderr_path.exists() else ""
+        if rc == 0 and out:
             return True, use_model, out
-        detail = (err or out or f"exit_code={proc.returncode}")[:300]
+        detail = (err or out or f"exit_code={rc}")[:300]
         return False, use_model, f"⚠️ 本機 AGY 覆核執行異常（請直接參考純程式判定結果）：\n\n`{detail}`"
-    except subprocess.TimeoutExpired:
-        return False, use_model, "⏳ 本機 AGY 視覺覆核逾時，請直接參考上方純程式判定結果。"
     except Exception as exc:
+        if proc is not None:
+            _terminate_proc_tree(proc)
         return False, use_model, f"⚠️ 無法啟動本機 AGY（{exc}），請直接參考純程式判定結果。"
     finally:
+        if proc is not None and proc.poll() is None:
+            _terminate_proc_tree(proc)
         MAX_CONCURRENT_AGY.release()
 
 
-def _call_remote_bridge(payload: dict[str, Any]) -> tuple[bool, str, str]:
+def _call_remote_bridge(
+    payload: dict[str, Any],
+    cancel_event: threading.Event | None = None,
+) -> tuple[bool, str, str]:
     bridge_url = _read_env_var("AGY_BRIDGE_URL").rstrip("/")
     bridge_token = _read_env_var("AGY_BRIDGE_TOKEN")
     if not bridge_url:
@@ -153,6 +219,8 @@ def _call_remote_bridge(payload: dict[str, Any]) -> tuple[bool, str, str]:
         headers=headers,
         method="POST",
     )
+    if cancel_event is not None and cancel_event.is_set():
+        return False, "", "🛑 已取消本次遠端 AGY 覆核。"
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -165,7 +233,10 @@ def _call_remote_bridge(payload: dict[str, Any]) -> tuple[bool, str, str]:
         return False, "", f"🤖 連線至本機 AGY 覆核員失敗（{exc}），請直接參考上方純程式判定結果。"
 
 
-def _execute_review_payload_locally(payload: dict[str, Any]) -> tuple[bool, str, str]:
+def _execute_review_payload_locally(
+    payload: dict[str, Any],
+    cancel_event: threading.Event | None = None,
+) -> tuple[bool, str, str]:
     mode = str(payload.get("mode") or "single")
     project_id = str(payload.get("project_id") or "unknown")
     spec_brief = str(payload.get("spec_brief") or "").strip()
@@ -219,7 +290,7 @@ def _execute_review_payload_locally(payload: dict[str, Any]) -> tuple[bool, str,
                 f"本次專案為 `{project_id}`，純程式判定摘要為：`{pred_summary}`。\n"
                 "請依循「模式 A：單張精細視覺覆核」格式，以親切細心的繁體中文直接回覆客戶（切勿提及任何本機暫存路徑或內部系統細節）。"
             )
-            return _run_local_agy_on_files(work_dir, prompt, timeout_sec=120)
+            return _run_local_agy_on_files(work_dir, prompt, timeout_sec=120, cancel_event=cancel_event)
 
         # Batch mode
         lines = "\n".join(
@@ -233,7 +304,7 @@ def _execute_review_payload_locally(payload: dict[str, Any]) -> tuple[bool, str,
             f"{lines}\n\n"
             "請依循「模式 B：整批盲測視覺覆核」格式，以親切細心的繁體中文直接回覆客戶（切勿提及任何本機暫存路徑或內部系統細節）。"
         )
-        return _run_local_agy_on_files(work_dir, prompt, timeout_sec=180)
+        return _run_local_agy_on_files(work_dir, prompt, timeout_sec=180, cancel_event=cancel_event)
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
 
@@ -244,6 +315,7 @@ def review_single(
     vis_img: Image.Image,
     pred_summary: str,
     spec_brief: str = "",
+    cancel_event: threading.Event | None = None,
 ) -> str:
     payload = {
         "mode": "single",
@@ -257,10 +329,10 @@ def review_single(
     }
     t0 = time.perf_counter()
     if _read_env_var("AGY_BRIDGE_URL"):
-        ok, model_used, text = _call_remote_bridge(payload)
+        ok, model_used, text = _call_remote_bridge(payload, cancel_event=cancel_event)
         source_tag = "遠端回呼本機 AGY"
     else:
-        ok, model_used, text = _execute_review_payload_locally(payload)
+        ok, model_used, text = _execute_review_payload_locally(payload, cancel_event=cancel_event)
         source_tag = "本機 AGY"
     dt = time.perf_counter() - t0
     if not ok:
@@ -273,6 +345,7 @@ def review_batch(
     batch_items: list[dict[str, Any]],
     spec_brief: str = "",
     max_imgs: int = 12,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     selected = batch_items[:max_imgs]
     images_payload: list[dict[str, str]] = []
@@ -301,10 +374,10 @@ def review_batch(
     }
     t0 = time.perf_counter()
     if _read_env_var("AGY_BRIDGE_URL"):
-        ok, model_used, text = _call_remote_bridge(payload)
+        ok, model_used, text = _call_remote_bridge(payload, cancel_event=cancel_event)
         source_tag = "遠端回呼本機 AGY"
     else:
-        ok, model_used, text = _execute_review_payload_locally(payload)
+        ok, model_used, text = _execute_review_payload_locally(payload, cancel_event=cancel_event)
         source_tag = "本機 AGY"
     dt = time.perf_counter() - t0
     if not ok:
@@ -314,7 +387,7 @@ def review_batch(
 
 
 def create_agy_bridge_router() -> APIRouter:
-    """供未來 Hugging Face Space 雲端站點透過安全 Token 回呼這台電腦跑 `agy.exe` 的橋接端點。"""
+    """供未來 Hugging Face Space 雲端站點透過安全 Token 回呼這台電腦跑 `agy.exe` 的橋接端點（含斷線自動中止）。"""
     router = APIRouter()
 
     @router.get("/api/agy-review/health")
@@ -344,7 +417,18 @@ def create_agy_bridge_router() -> APIRouter:
         except Exception:
             return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
 
-        ok, model_used, text = _execute_review_payload_locally(payload)
+        cancel_evt = threading.Event()
+        task = asyncio.create_task(asyncio.to_thread(_execute_review_payload_locally, payload, cancel_evt))
+        try:
+            while not task.done():
+                if await request.is_disconnected():
+                    cancel_evt.set()
+                    break
+                await asyncio.sleep(0.3)
+            ok, model_used, text = await task
+        finally:
+            cancel_evt.set()
+
         if ok:
             return JSONResponse({"ok": True, "model": model_used, "review_md": text})
         return JSONResponse({"ok": False, "model": model_used, "error": text}, status_code=503)

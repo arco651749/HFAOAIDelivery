@@ -64,6 +64,31 @@ STAGE_LABELS = {
 # 依 (project_id, mtime_ns) 快取已載入的 CODER/detector.py，避免整批測試重複載入模型
 _DETECTOR_CACHE: dict[str, tuple[int, object]] = {}
 
+# 追蹤各專案正在執行之 AGY 視覺覆核任務（供重傳、登出或斷線時秒殺舊 agy.exe，零浪費額度）
+_ACTIVE_AGY_LOCK = threading.Lock()
+_ACTIVE_AGY_CANCELS: dict[tuple[str, str], threading.Event] = {}
+
+
+def _cancel_agy_slot(project_id: str | None, mode: str | None = None) -> None:
+    if not project_id:
+        return
+    with _ACTIVE_AGY_LOCK:
+        modes = (mode,) if mode else ("single", "batch")
+        for m in modes:
+            evt = _ACTIVE_AGY_CANCELS.pop((project_id, m), None)
+            if evt is not None:
+                evt.set()
+
+
+def _register_agy_slot(project_id: str, mode: str) -> threading.Event:
+    evt = threading.Event()
+    with _ACTIVE_AGY_LOCK:
+        old = _ACTIVE_AGY_CANCELS.get((project_id, mode))
+        if old is not None:
+            old.set()
+        _ACTIVE_AGY_CANCELS[(project_id, mode)] = evt
+    return evt
+
 
 def _today_str() -> str:
     return datetime.now().strftime("%Y-%m-%d")
@@ -260,7 +285,8 @@ def handle_login(project_id: str, password: str):
     )
 
 
-def handle_logout():
+def handle_logout(project_id: str | None = None):
+    _cancel_agy_slot(project_id)
     return (
         None,
         "已登出。請重新輸入專案帳號與密碼。",
@@ -634,6 +660,8 @@ def _run_detector_engine(project_id: str, img_bgr: np.ndarray) -> dict:
 
 
 def run_single_test(project_id: str | None, image: Image.Image | None):
+    # 只要使用者清空圖片或重新上傳新圖，立刻秒殺上一張還在跑的 AGY 覆核
+    _cancel_agy_slot(project_id, "single")
     if not project_id:
         return None, "⚠️ 請先登入專案帳號。", None, None, "", ""
     if image is None:
@@ -702,24 +730,35 @@ def _spinner_md(title: str, elapsed_sec: float) -> str:
     )
 
 
-def _yield_with_spinner(title: str, fn, *args):
+def _yield_with_spinner(project_id: str, mode: str, title: str, fn, *args):
+    cancel_evt = _register_agy_slot(project_id, mode)
     box: dict[str, str] = {}
 
     def _worker():
         try:
-            box["result"] = fn(*args)
+            box["result"] = fn(*args, cancel_event=cancel_evt)
         except Exception as exc:
             box["result"] = f"⚠️ AGY 視覺覆核執行異常（請直接參考純程式判定結果）：`{exc}`"
 
     t0 = time.perf_counter()
     th = threading.Thread(target=_worker, daemon=True)
     th.start()
-    yield _spinner_md(title, 0.0)
-    while th.is_alive():
-        th.join(timeout=1.0)
-        if th.is_alive():
-            yield _spinner_md(title, time.perf_counter() - t0)
-    yield box.get("result", "⚠️ 未取得 AGY 回覆，請稍後重試。")
+    try:
+        yield _spinner_md(title, 0.0)
+        while th.is_alive():
+            if cancel_evt.is_set():
+                return
+            th.join(timeout=1.0)
+            if th.is_alive() and not cancel_evt.is_set():
+                yield _spinner_md(title, time.perf_counter() - t0)
+        if not cancel_evt.is_set():
+            yield box.get("result", "⚠️ 未取得 AGY 回覆，請稍後重試。")
+    finally:
+        # 瀏覽器關閉分頁、F5 重整、斷線或被新任務取代時，GeneratorExit 立即觸發秒殺 agy.exe！
+        cancel_evt.set()
+        with _ACTIVE_AGY_LOCK:
+            if _ACTIVE_AGY_CANCELS.get((project_id, mode)) is cancel_evt:
+                _ACTIVE_AGY_CANCELS.pop((project_id, mode), None)
 
 
 def run_single_ai_review(
@@ -735,6 +774,8 @@ def run_single_ai_review(
         yield "⚠️ 請先於上方拖入一張圖片並完成純程式檢測後，再執行 AGY 視覺覆核。"
         return
     yield from _yield_with_spinner(
+        project_id,
+        "single",
         "AGY 單張視覺覆核進行中",
         review_single,
         project_id,
@@ -755,6 +796,8 @@ def run_single_ai_review_auto(
         yield ""
         return
     yield from _yield_with_spinner(
+        project_id,
+        "single",
         "AGY 單張視覺覆核進行中",
         review_single,
         project_id,
@@ -773,6 +816,8 @@ def run_batch_ai_review(project_id: str | None, batch_items: list[dict] | None):
         yield "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AGY 整批覆核。"
         return
     yield from _yield_with_spinner(
+        project_id,
+        "batch",
         f"AGY 整批視覺覆核進行中（共 {min(len(batch_items), 12)} 張）",
         review_batch,
         project_id,
@@ -786,6 +831,8 @@ def run_batch_ai_review_auto(project_id: str | None, batch_items: list[dict] | N
         yield ""
         return
     yield from _yield_with_spinner(
+        project_id,
+        "batch",
         f"AGY 整批視覺覆核進行中（共 {min(len(batch_items), 12)} 張）",
         review_batch,
         project_id,
@@ -855,6 +902,8 @@ def report_misjudgment(
 
 
 def run_batch_test(project_id: str | None, files):
+    # 只要使用者重新執行整批掃描，立刻秒殺上一批還在跑的 AGY 覆核
+    _cancel_agy_slot(project_id, "batch")
     if not project_id:
         return [], None, "⚠️ 請先登入專案帳號。", [], [], ""
     if not files:
@@ -1231,6 +1280,7 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
     )
     btn_logout.click(
         handle_logout,
+        inputs=[current_project],
         outputs=[current_project, login_msg, auth_panel, main_panel],
     )
 
