@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import zipfile
 from collections import Counter
@@ -672,7 +673,7 @@ def run_single_test(project_id: str | None, image: Image.Image | None):
         image,
         Image.fromarray(vis_rgb),
         str(res.get("summary_label", "")),
-        "⏳ **🤖 AGY 視覺覆核員 (`aoi_reviewer`) 正在自動細心看圖覆核中...** *(上方純程式結果已即時顯示，請稍候約 15～30 秒)*",
+        _spinner_md("AGY 單張視覺覆核啟動中", 0.0),
     )
 
 
@@ -686,17 +687,62 @@ def _read_spec_brief(project_id: str, max_chars: int = 2200) -> str:
         return ""
 
 
+def _spinner_md(title: str, elapsed_sec: float) -> str:
+    return (
+        '<div style="display:flex;align-items:center;gap:12px;padding:12px 16px;'
+        'border-radius:10px;border:1px solid #38bdf8;background:rgba(56,189,248,0.12);margin:6px 0;">'
+        '<svg width="28" height="28" viewBox="0 0 24 24" style="flex-shrink:0;">'
+        '<circle cx="12" cy="12" r="9" fill="none" stroke="#bae6fd" stroke-width="3"/>'
+        '<path d="M12 3a9 9 0 0 1 9 9" fill="none" stroke="#0284c7" stroke-width="3" stroke-linecap="round">'
+        '<animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="0.9s" repeatCount="indefinite"/>'
+        '</path></svg>'
+        f'<div><b>🤖 {title}</b><br>'
+        f'<span style="font-size:0.92em;opacity:0.88;">AGY 視覺覆核員 (<code>aoi_reviewer</code>) 正在本機沙盒細心看圖分析中，已耗時 <b>{elapsed_sec:.0f} 秒</b>（純程式結果已顯示，請稍候）...</span>'
+        '</div></div>'
+    )
+
+
+def _yield_with_spinner(title: str, fn, *args):
+    box: dict[str, str] = {}
+
+    def _worker():
+        try:
+            box["result"] = fn(*args)
+        except Exception as exc:
+            box["result"] = f"⚠️ AGY 視覺覆核執行異常（請直接參考純程式判定結果）：`{exc}`"
+
+    t0 = time.perf_counter()
+    th = threading.Thread(target=_worker, daemon=True)
+    th.start()
+    yield _spinner_md(title, 0.0)
+    while th.is_alive():
+        th.join(timeout=1.0)
+        if th.is_alive():
+            yield _spinner_md(title, time.perf_counter() - t0)
+    yield box.get("result", "⚠️ 未取得 AGY 回覆，請稍後重試。")
+
+
 def run_single_ai_review(
     project_id: str | None,
     orig_img: Image.Image | None,
     vis_img: Image.Image | None,
     pred_summary: str,
-) -> str:
+):
     if not project_id:
-        return "⚠️ 請先登入專案帳號。"
+        yield "⚠️ 請先登入專案帳號。"
+        return
     if orig_img is None or vis_img is None:
-        return "⚠️ 請先於上方拖入一張圖片並完成純程式檢測後，再執行 AGY 視覺覆核。"
-    return review_single(project_id, orig_img, vis_img, pred_summary, _read_spec_brief(project_id))
+        yield "⚠️ 請先於上方拖入一張圖片並完成純程式檢測後，再執行 AGY 視覺覆核。"
+        return
+    yield from _yield_with_spinner(
+        "AGY 單張視覺覆核進行中",
+        review_single,
+        project_id,
+        orig_img,
+        vis_img,
+        pred_summary,
+        _read_spec_brief(project_id),
+    )
 
 
 def run_single_ai_review_auto(
@@ -704,24 +750,48 @@ def run_single_ai_review_auto(
     orig_img: Image.Image | None,
     vis_img: Image.Image | None,
     pred_summary: str,
-) -> str:
+):
     if not project_id or orig_img is None or vis_img is None:
-        return ""
-    return review_single(project_id, orig_img, vis_img, pred_summary, _read_spec_brief(project_id))
+        yield ""
+        return
+    yield from _yield_with_spinner(
+        "AGY 單張視覺覆核進行中",
+        review_single,
+        project_id,
+        orig_img,
+        vis_img,
+        pred_summary,
+        _read_spec_brief(project_id),
+    )
 
 
-def run_batch_ai_review(project_id: str | None, batch_items: list[dict] | None) -> str:
+def run_batch_ai_review(project_id: str | None, batch_items: list[dict] | None):
     if not project_id:
-        return "⚠️ 請先登入專案帳號。"
+        yield "⚠️ 請先登入專案帳號。"
+        return
     if not batch_items:
-        return "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AGY 整批覆核。"
-    return review_batch(project_id, batch_items, _read_spec_brief(project_id))
+        yield "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AGY 整批覆核。"
+        return
+    yield from _yield_with_spinner(
+        f"AGY 整批視覺覆核進行中（共 {min(len(batch_items), 12)} 張）",
+        review_batch,
+        project_id,
+        batch_items,
+        _read_spec_brief(project_id),
+    )
 
 
-def run_batch_ai_review_auto(project_id: str | None, batch_items: list[dict] | None) -> str:
+def run_batch_ai_review_auto(project_id: str | None, batch_items: list[dict] | None):
     if not project_id or not batch_items:
-        return ""
-    return review_batch(project_id, batch_items, _read_spec_brief(project_id))
+        yield ""
+        return
+    yield from _yield_with_spinner(
+        f"AGY 整批視覺覆核進行中（共 {min(len(batch_items), 12)} 張）",
+        review_batch,
+        project_id,
+        batch_items,
+        _read_spec_brief(project_id),
+    )
 
 
 def report_misjudgment(
@@ -852,7 +922,7 @@ def run_batch_test(project_id: str | None, files):
 
     dist_str = " / ".join(f"{k}: {v} 張" for k, v in label_counter.items())
     summary = f"✅ 整批掃描完成（版本：`{st.get('version', 'v1.0')}`）：共 **{len(rows)}** 張（{dist_str}）"
-    ai_hint = "⏳ **🤖 AGY 視覺覆核員 (`aoi_reviewer`) 正在自動逐張檢視本批標註圖並撰寫覆核總表...** *(下方相簿與 Excel 報表已就緒，可先檢視)*"
+    ai_hint = _spinner_md(f"AGY 整批視覺覆核啟動中（共 {min(len(batch_meta), 12)} 張）", 0.0)
     return gr.update(value=rows, headers=headers), str(report_path), summary, gallery_items, batch_meta, ai_hint
 
 
