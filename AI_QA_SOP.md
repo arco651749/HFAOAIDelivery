@@ -39,7 +39,7 @@
 - [ ] **未擅自建立或覆寫線上 `CODER/detector.py`**（僅操作 `CODER/detector_dev.py`）。
 - [ ] 未修改 `STATE.json` 與 `ANALYST/ANALYST.md`。
 - [ ] **Windows 中文路徑安全**：檢查 `CODER/detector_dev.py` 全文**無** `cv2.imread(` 與 `cv2.imwrite(`（一律改用 `np.fromfile` + `cv2.imdecode` / `imencode().tofile` 或 `PIL`）。
-- [ ] **標準函式庫白名單合規**：確認 `CODER/detector_dev.py` 推論主路徑僅使用 `cv2` (OpenCV 5.0 `cv2.dnn` 優先) / `numpy` / `PIL`（繪字）（僅特殊算子或 GPU 案允許 `onnxruntime`），未夾帶 `torch` / `ultralytics` / `scipy` / `scikit-image` / `sklearn` 等禁止套件，確保後續可 1:1 轉譯單檔 C++ DLL。
+- [ ] **標準函式庫白名單合規**：確認 `CODER/detector_dev.py` 推論主路徑僅使用 `cv2` (OpenCV 5.1 `cv2.dnn` 優先) / `numpy` / `zxingcpp`（讀碼案） / `PIL`（繪字）（僅特殊算子或 GPU 案允許 `onnxruntime`），未夾帶 `torch` / `ultralytics` / `scipy` / `scikit-image` / `sklearn` / `pyzbar` 等禁止套件，確保後續可 1:1 轉譯單檔 C++ DLL。
 
 ### 3.2 獨立程式與介面合約實測（唯讀指令執行）
 使用單行 Python 唯讀指令對 `CODER/detector_dev.py` 進行實測：

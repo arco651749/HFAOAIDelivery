@@ -49,21 +49,21 @@ projects/<客戶名稱>-<客戶專案>/
 
 ---
 
-## 三、 跨語言標準函式庫白名單與「OpenCV 5.0 單一核心」原生 DLL 封裝規範
+## 三、 跨語言標準函式庫白名單與「OpenCV 5.1 單一核心」原生 DLL 封裝規範
 
 本平台採 **「OpenCV 5.1 大一統架構（影像處理 + AI 推論共用同一套 `cv::dnn` 引擎）」**：線上開發與盲測用 Python（極速迭代），結案交付 1:1 轉譯為**單一原生 C++ DLL（零安裝、跨語言呼叫、0 數值漂移）**。
 
 ### 3.1 各語言標準函式庫白名單
 
-| 語言 / 階段 | 影像處理標準庫 | AI 推論標準庫 | 嚴禁使用（防堵無法封裝單檔之套件） |
+| 語言 / 階段 | 影像處理與讀碼標準庫 | AI 推論標準庫 | 嚴禁使用（防堵無法封裝單檔之套件） |
 | :--- | :--- | :--- | :--- |
-| **Python（線上開發與雲端盲測 `detector_dev.py` / `detector.py`）** | `opencv-python` (`cv2` ≥ 5.1)、`numpy`、`Pillow`（僅用於繪製中文標註字體） | **🏆 主力首選：`cv2.dnn` (`OpenCV 5.1 ENGINE_AUTO / ENGINE_OPENCV`)**<br>*(一律以 `np.fromfile(path, np.uint8)` 讀入記憶體 Buffer 後呼叫 `cv2.dnn.readNetFromONNX(buf)`，預設即啟用新版圖引擎，兼顧 Windows 中文路徑安全並 1:1 對齊 C++ 內嵌權重！)*<br>🥈 僅遇極少數冷門不支援算子或需 GPU 加速時才退用 `onnxruntime`<br>*(註：`ultralytics` / `torch` **僅限訓練與匯出 `.onnx` 腳本**，嚴禁在 `detector.py` 推論路徑中 `import`)* | 嚴禁在推論主流程使用 `scipy`、`scikit-image`、`scikit-learn`、`pandas`、`torch` 等難以平轉 C++ 靜態編譯的套件 |
-| **C++（單檔原生 DLL 核心引擎 `MetaVisionAOI.dll`）** | **唯一一套靜態編譯 `OpenCV 5.1`**（僅編譯 `core`、`imgproc`、`imgcodecs`、`dnn` 四個模組，搭配 MSVC `/MT` Static CRT） | **同一套 `OpenCV 5.1 cv::dnn (ENGINE_AUTO / ENGINE_OPENCV)` 直接吃 `.onnx` 記憶體陣列**（免綁 `ncnn`、免外帶 `onnxruntime.dll`、免額外模型格式轉換；僅 GPU / 冷門算子案選配 `ENGINE_ORT`） | 嚴禁使用 `/MD` 動態 CRT（防客戶端缺少 `vcruntime140.dll`）、嚴禁依賴 Python/CUDA Runtime 作為 CPU 單檔預設前提 |
-| **C# / C++ / Python 客戶端呼叫層** | 客戶端自備影像來源（`OpenCvSharp` / `Bitmap` / `cv::Mat` / `numpy`），直接傳入 **BGR 連續記憶體指標**或**圖檔路徑** | **無須安裝任何 OpenCV、AI 或 VC++ 執行環境** | 不強迫客戶端綁定特定 OpenCV 或 .NET 版本 |
+| **Python（線上開發與雲端盲測 `detector_dev.py` / `detector.py`）** | `opencv-python` (`cv2` ≥ 5.1)、`numpy`、`zxing-cpp`（DataMatrix / QR / 1D 工業全碼讀取）、`Pillow`（僅用於繪製中文標註字體與寫入 PNG `iTXt`） | **🏆 主力首選：`cv2.dnn` (`OpenCV 5.1 ENGINE_AUTO / ENGINE_OPENCV`)**<br>*(訓練匯出 `.onnx` 固定採 `dynamic=False` + `opset=12~17`；開發期一律以 `np.fromfile(path, np.uint8)` 讀入 Buffer 並實測 `cv2.dnn.readNetFromONNX(buf)`，兼顧 Windows 中文路徑安全與提早驗證算子相容性！)*<br>🥈 僅遇極少數冷門不支援算子或需 GPU 加速時才退用 `onnxruntime`<br>*(註：`ultralytics` / `torch` **僅限訓練與匯出 `.onnx` 腳本**，嚴禁在 `detector.py` 推論路徑中 `import`)* | 嚴禁在推論主流程使用 `scipy`、`scikit-image`、`scikit-learn`、`pandas`、`torch`、`pyzbar` 等難以平轉 C++ 靜態編譯或不支援 DataMatrix 之套件 |
+| **C++（單檔原生 DLL 核心引擎 `MetaVisionAOI.dll`）** | **統一安裝於 `D:\opencv5_static` 之靜態 `/MT` 套件庫**：`OpenCV 5.1`（`core`、`imgproc`、`imgcodecs`、`dnn`、`geometry`、`flann`）＋ **`zxing-cpp` (`ZXing.lib`)**（DataMatrix / QR / 全條碼靜態讀碼） | **同一套 `OpenCV 5.1 cv::dnn (ENGINE_AUTO / ENGINE_OPENCV)` 直接吃 Win32 `RCDATA` 內嵌 `.onnx` 記憶體指標**（免綁 `ncnn`、免外帶 `onnxruntime.dll`、免額外模型格式轉換；僅 GPU / 冷門算子案選配 `ENGINE_ORT`） | 嚴禁使用 `/MD` 動態 CRT（防客戶端缺少 `vcruntime140.dll`）、嚴禁依賴 Python/CUDA Runtime 作為 CPU 單檔預設前提 |
+| **C# / C++ / Python 客戶端呼叫層** | 客戶端自備影像來源（`OpenCvSharp` / `Bitmap` / `cv::Mat` / `numpy`），直接傳入 **連續記憶體指標（1=GRAY / 3=BGR / 4=BGRA）** 或 **UTF-8 圖檔路徑** | **無須安裝任何 OpenCV、AI 或 VC++ 執行環境** | 不強迫客戶端綁定特定 OpenCV 或 .NET 版本 |
 
-### 3.2 單一原生 DLL 零安裝靜態編譯規範（Windows x64 + OpenCV 5.0）
+### 3.2 單一原生 DLL 零安裝靜態編譯規範（Windows x64 + OpenCV 5.1）
 欲達成「**客戶只拿到 1 顆 `.dll`，不用裝 OpenCV、不用裝 Python、不用裝 ONNX Runtime、連 Microsoft Visual C++ Redistributable 都不用裝**」，編譯時必須遵守：
-1. **從 OpenCV 5.1 原始碼一次性靜態編譯四個核心模組**：
+1. **從 OpenCV 5.1 原始碼一次性靜態編譯核心模組（本機已編妥於 `D:\opencv5_static`）**：
    ```powershell
    $cmake = "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
    git clone --branch 5.1.0 --depth 1 https://github.com/opencv/opencv.git D:\opencv5_src
@@ -78,40 +78,53 @@ projects/<客戶名稱>-<客戶專案>/
      -DCMAKE_INSTALL_PREFIX=D:\opencv5_static
    & $cmake --build D:\opencv5_build --config Release --target INSTALL --parallel
    ```
-   *(編譯完成後永久保存於 `D:\opencv5_static\`，之後每顆專案 `MetaVisionAOI.dll` 只需 3～5 秒即可編譯完成！)*
-2. **MSVC 編譯器必設 `/MT`（Static CRT）**：所有靜態 `.lib` 與主專案一律對齊 `MultiThreaded (/MT)`，確保零外部系統 DLL 依賴。
-3. **ONNX 權重內嵌防盜（真單檔無外露權重）**：
-   - 訓練端匯出標準 `.onnx` 後，轉為 C++ 靜態位元陣列（`const unsigned char kModelOnnx[]`）直接編譯進 `MetaVisionAOI.dll`（可選擇簡單 XOR/AES 混淆於載入記憶體時還原）。
-   - 推論初始化直接呼叫 `cv::dnn::readNetFromONNX((const char*)kModelOnnx, sizeof(kModelOnnx))`（預設 `ENGINE_AUTO` 即啟用 OpenCV 5.1 新圖引擎），交付時不外露任何外部權重檔案。
+   *(註：OpenCV 5.1 靜態建置會自動連帶編出 `geometry` 與 `flann`；若單檔 DLL 需於 C++ 端直接執行 `calibrateCamera`/`findHomography`，再追加 `calib` 模組。專案 CMake 設定 `-DCMAKE_PREFIX_PATH=D:\opencv5_static` 即可同時 `find_package(OpenCV REQUIRED)` 與 `find_package(ZXing REQUIRED)`。)*
+2. **MSVC 編譯器必設 `/MT`（Static CRT）與零依賴驗收**：
+   - 所有專案 `CMakeLists.txt` **必須**設定 `set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")`（防預設 `/MD` 連結 `D:\opencv5_static` 時爆 `LNK2038`）。
+   - 編譯完成後**必跑** `dumpbin /dependents MetaVisionAOI.dll`，確認僅依賴 Windows 系統核心 DLL（`KERNEL32.dll` 等），**嚴禁出現 `VCRUNTIME140.dll`、`MSVCP140.dll` 或 `opencv_*.dll`**。
+3. **ONNX 權重內嵌防盜（Win32 `RCDATA` 資源嵌入，嚴禁轉超大 C 陣列）**：
+   - 嚴禁將 10–30 MB `.onnx` 轉為 `const unsigned char[]` C 文字陣列（會暴增破百 MB 導致 MSVC `C1060 out of heap space`）。
+   - 一律透過 **Win32 Resource (`.rc` `RCDATA`)** 將 `.onnx`（可做 XOR/AES 混淆）直接打包進 `MetaVisionAOI.dll`，執行期以 `FindResourceW` / `LoadResource` / `LockResource` 取得記憶體指標與長度，直接傳入 `cv::dnn::readNetFromONNX(ptr, size)`（預設 `ENGINE_AUTO` 即啟用 OpenCV 5.1 新圖引擎）——依然 **100% 單一 `.dll`**、3 秒編完且零記憶體拷貝。
 
 ### 3.3 統一跨語言 C ABI 匯出介面 (`extern "C"`)
-所有單檔 DLL 一律匯出純 C ABI（零 C++ Name Mangling、零 STL 跨邊界問題），輸入支援「記憶體 BGR 指標」與「UTF-8 圖檔路徑」，輸出統一為 **UTF-8 JSON 字串**：
+所有單檔 DLL 一律匯出純 C ABI（零 C++ Name Mangling、零 STL 跨邊界問題），輸入支援「記憶體連續影像指標（GRAY/BGR/BGRA）」與「UTF-8 圖檔路徑」，輸出統一為 **UTF-8 JSON 字串**：
 
 ```c
 // MetaVisionAOI.h — 跨語言統一 C ABI 合約（C++ / C# P/Invoke / Python ctypes 共用）
 #ifdef _WIN32
-  #define MV_API __declspec(dllexport)
+  #ifdef MV_BUILDING_DLL
+    #define MV_API __declspec(dllexport)
+  #else
+    #define MV_API __declspec(dllimport)
+  #endif
 #else
   #define MV_API
 #endif
 
 extern "C" {
+    // 0. 查詢 SDK 與專案模型版本（回傳靜態常數字串，免釋放）
+    MV_API const char* MV_GetVersion(void);
+
     // 1. 建立檢測器實例（config_json 可傳 NULL 使用預設參數；失敗回傳 NULL）
     MV_API void* MV_Create(const char* config_json);
 
-    // 2. 記憶體 BGR 影像直接推論（推薦產線相機零寫碟高速呼叫）
-    //    回傳值：0=成功, >0=緩衝區不足(回傳所需位元組數), <0=錯誤碼
+    // 2. 記憶體影像直接推論（推薦產線相機零寫碟高速呼叫）
+    //    channels: 1=GRAY, 3=BGR, 4=BGRA（相容工業黑白相機與 C# 32bpp Bitmap）
+    //    stride: 每列位元組數（傳 0 視為緊湊 width * channels）
+    //    回傳值：0=成功；>0=out_json_buf 空間不足（回傳所需位元組數，含結尾 '\0'）；<0=錯誤碼
     MV_API int MV_Detect(
         void* handle,
-        const unsigned char* bgr_data,
+        const unsigned char* img_data,
         int width,
         int height,
+        int channels,
         int stride,
         char* out_json_buf,
         int buf_size
     );
 
-    // 3. UTF-8 檔案路徑推論（支援 Windows 中文路徑，內部以寬字元開啟）
+    // 3. UTF-8 檔案路徑推論（支援 Windows 中文路徑）
+    //    實作細則：內部必以 MultiByteToWideChar(CP_UTF8) + _wfopen 讀入記憶體再 cv::imdecode，嚴禁 cv::imread
     MV_API int MV_DetectFile(
         void* handle,
         const char* utf8_image_path,
@@ -119,16 +132,119 @@ extern "C" {
         int buf_size
     );
 
-    // 4. 釋放實例資源
+    // 4. 取得最近一次錯誤詳情（handle 可為 NULL 查詢建立失敗原因；回傳內部指標免釋放）
+    MV_API const char* MV_GetLastError(void* handle);
+
+    // 5. 釋放實例資源
     MV_API void MV_Destroy(void* handle);
 }
 ```
 
+- **產線防崩潰與執行緒紅線**：
+  - **例外邊界**：所有 `extern "C"` 函式實作外層**必須包覆 `try { ... } catch (...)`**，轉寫錯誤碼與 `last_error`，嚴禁讓 C++ 例外跨 ABI 炸毀客戶端宿主程式。
+  - **執行緒安全**：單一 `handle` **非執行緒安全**（多相機／多執行緒請各自呼叫 `MV_Create` 建立獨立 `handle`）。
+  - **緩衝區建議**：呼叫端建議預配 `≥ 64 KB`（分割多邊形密集案建議 `≥ 256 KB`），並於 `handle` 內快取最近一次 JSON 避免緩衝區不足重呼時重複推論。
 - **標準交付附帶呼叫薄封裝（隨 DLL 一併交付）**：
   - `MetaVisionAOI.dll`（唯一核心二進位檔）
   - `MetaVisionAOI.h`（C / C++ 標頭檔）
   - `MetaVisionAOI.cs`（C# P/Invoke `[DllImport("MetaVisionAOI.dll")]` 封裝類別，.NET Framework / .NET 6~9 通用）
   - `metavision_aoi.py`（Python `ctypes` 封裝模組與範例）
+
+### 3.4 工業量測、幾何定位與讀碼標準流程（OpenCV 5.1 + ZXing-C++）
+針對傳統量測、二次亞像素定位與讀碼案件，`aoi_coder` 應優先採用以下經實戰驗證之標準流程（Python 與 C++ 函式 1:1 對應，避免使用參數敏感的舊版暴力霍夫演算法）：
+
+1. **相機校正與九點標定（Pixel ↔ Robot mm）**：
+   - **特徵提取**：棋盤格用 `findChessboardCornersSB()`（抗反光且自帶亞像素）；高精工業標定板用 `findCirclesGrid()`。
+   - **內參與畸變校正**：以 `calibrateCamera()` 求得 `K` 與 `distCoeffs`；產線推論於開機算一次 `initUndistortRectifyMap()`，每張圖只執行高速 `remap()`（若僅需回傳少數點座標，改用 **`undistortPoints()`** 免重採樣整張圖）。
+   - **像素轉世界座標**：俯拍透視平面採 `findHomography(..., RANSAC)` ＋ `perspectiveTransform()`；遠心鏡頭／無透視採 `estimateAffine2D()`。
+   - *(備註：`D:\opencv5_static` 若需在 C++ 單檔 DLL 內直接執行 `calibrateCamera`/`findHomography`，需確認已包含 OpenCV 5.1 `calib` 模組；純 `remap`/`warpAffine`/`warpPolar` 則已內建於 `imgproc`。)*
+2. **強化找線（FindLine / Rake 亞像素卡尺）**：
+   - **全域自動找線**：優先使用 `createLineSegmentDetector(LSD_REFINE_ADV)`（免調 Canny 雙門檻、輸出亞像素端點）。
+   - **高精度矩形卡尺法（精度 `0.05 ~ 0.1 px`）**：先以 `warpAffine()` 將任意角度之矩形卡尺 ROI 轉正為水平條帶 ➔ 沿法線做 1D 高斯平滑 ＋ `Sobel` 梯度，取每列極值並做二次拋物線亞像素插值 ➔ 以 **`fitLine(..., DIST_HUBER / DIST_WELSCH)`**（或搭配 RANSAC）濾除毛邊/缺口離群點 ➔ 逆矩陣轉回原圖座標。
+3. **強化找圓 / 橢圓（FindCircle / 二次精定位）**：
+   - **全域初定位**：使用 `HoughCircles(..., HOUGH_GRADIENT_ALT)`（`param2` 直接對應真圓度 `0.85~0.92`）或先以 OpenCV 5.1 `cv::dnn` (YOLO) 初框目標 ROI。
+   - **高精度擬合**：使用 **`fitEllipseDirect()`** 或 **`fitEllipseAMS()`**（抗斷弧、抗反光遮擋、相容透視微橢圓且不發散）。
+4. **扇形 / 圓環區域檢測與找弧（Annulus / Sector / Spoke 卡尺）**：
+   - **瑕疵 / 灰階 / 顏色 / 面積統計（Mask 遮罩法）**：先切出扇形外接小矩形（避免全圖運算）➔ 以 `ellipse(..., startAngle, endAngle, 255, -1)` 畫外扇形，再以 `circle(..., r_in, 0, -1)` 挖空內圓得到圓環扇形 `mask`（做瑕疵邊緣檢測前將 `mask` 內縮 `erode` 2～3 px 防止邊界誤報）。
+   - **扇形找圓弧 (`Spoke`) / 測圓度 / 抓缺口 / 環形 OCR（極座標攤平法）**：以 **`warpPolar(..., WARP_POLAR_LINEAR)`** 將圓展開為極座標圖（X 軸=半徑 $r$、Y 軸=角度 $\theta$），直接矩形切片 `polar[start_deg:end_deg, r_in:r_out]`（跨 0°/360° 時將 `polar` 上下垂直拼接兩份即可無縫裁切）；沿每一列找 1D 亞像素邊緣後轉回直角座標 $(c_x + r\cos\theta,\; c_y + r\sin\theta)$ 做圓/橢圓擬合，可精準避開鍵槽、缺口與局部反光。
+5. **工業全碼讀取（DataMatrix ECC200 / QR / 1D / 雷雕 DPM）**：
+   - 統一使用 **`zxing-cpp`**（Python `import zxingcpp`；C++ 靜態連結 `D:\opencv5_static\lib\ZXing.lib`）。
+   - 大圖小碼或雷雕 DPM 必走三段式：**OpenCV 5.1（YOLO 或梯度密集區）切出碼區 ROI ➔ `imgproc` 強化（CLAHE 對比增強 / 反相 / 形態學閉運算連接點陣）➔ `zxing-cpp` 毫秒級解碼並輸出字串與四角點座標**。
+
+### 3.5 無損 PNG Metadata 統一資料結構（`MetaVisionAOI/1.0`）
+為確保**永不破壞原始影像像素**（方便未來重訓、換演算法回放與無損縮放檢視），歸檔與交付用 PNG 一律保留 100% 無損原圖，並將 **ROI（輸入區／YOLO 真值標註）**、**Overlay（演算法輸出疊圖）**、**相機校正 (`calibration`)** 與 **深度／點雲連結 (`depth_assets`)** 寫入 PNG 標準 **`iTXt` Chunk**（UTF-8 原生支援繁體中文，嚴禁使用僅支援 Latin-1 的 `tEXt`）：
+
+- **Chunk Keyword**：`MetaVisionAOI`（UTF-8 JSON；大資料量可啟用 `iTXt` zlib 壓縮）。
+- **寫入與防抹除鐵則**：
+  - **Replace-or-Insert 原子寫入**：更新同一張 PNG 時，**必須先剔除所有既有同名 `MetaVisionAOI` Chunk**，再於 `IEND` 前寫入唯一一份（含 Big-Endian 長度與 CRC32），並經 `.tmp` Atomic Rename 覆蓋防斷電損檔（嚴禁重複 append 造成雙份 Chunk）。
+  - **Python**：使用 `PIL.PngImagePlugin.PngInfo().add_itxt("MetaVisionAOI", json_str, zip=...)`；**注意 `cv2.imencode` / `cv::imwrite` 及未帶 `pnginfo` 的 `PIL.Image.save` 會靜默抹除 `iTXt`**，任何重存皆須顯式搬移原 `MetaVisionAOI` Chunk。
+  - **C++**：因 `D:\opencv5_static` 預設不安裝 3rdparty `png.h`，統一以 ~80 行純 C++ 直接解析／替換 PNG Chunk（零 header 依賴、免重編解碼像素、`< 1ms`）。
+  - 網頁/瀏覽器即時預覽圖僅在記憶體副本上渲染標註，不覆蓋無損原圖。
+- **統一座標、角度與矩陣方向約定（嚴格防漂移）**：
+  - 座標原點為原圖左上角 `(0, 0)`、單位 `px`（浮點數支援亞像素）；角度單位 `deg`（`0°` = 3 點鐘 `+X`，順時針為正）。
+  - **`calibration` 方向鎖死**：`homography` = **Pixel `(u,v,1)` → World `(X,Y,1)`**；`hand_eye_4x4` = **Camera → Robot Base (`T_base_cam`)**；`dist` = OpenCV 順序 `[k1,k2,p1,p2,k3...]`；`pose_3d_mm` 標明歐拉角順序（預設 `ZYX` deg）。
+- **兩用統一幾何基元 (`geom`)**（`rois[]` 與 `overlays[]` 100% 共用，且兩邊皆含 `label` 與 `class_id` 以無縫互通 YOLO 標註）：
+  - `point`：`{ "type": "point", "x", "y" }`
+  - `line`：`{ "type": "line", "x1", "y1", "x2", "y2" }`
+  - `rect`：`{ "type": "rect", "cx", "cy", "w", "h" }`（直接對齊 YOLO Detect）
+  - `rrect`：`{ "type": "rrect", "cx", "cy", "w", "h", "angle" }`（`w` 沿 `angle` 主軸、`h` 垂直 `angle + 90°`，`angle ∈ [0, 360)` 支援有方向 Rake 卡尺與 YOLO OBB）
+  - `circle`：`{ "type": "circle", "cx", "cy", "r" }`
+  - `ellipse`：`{ "type": "ellipse", "cx", "cy", "rx", "ry", "angle" }`（`rx`/`ry` 明定為**半軸長**非直徑，`rx` 沿 `angle` 主軸；從 `cv::fitEllipse` 轉換必除以 2）
+  - `sector`：`{ "type": "sector", "cx", "cy", "r_in", "r_out", "start_deg", "end_deg" }`（圓環／扇形／Spoke 卡尺；**順時針掃描且嚴格 `end_deg > start_deg`、`0 < end - start <= 360`**，跨 0° 寫 `350~370` 或 `-10~10` 防 `cv::ellipse` 畫反；`r_in=0` 為實心扇形，`0~360` 為整圈圓環）
+  - `polygon`：`{ "type": "polygon", "points": [[x,y], ...], "closed": true }`（多邊形 / 折線 / YOLO Seg）
+- **標準 JSON Schema 範例（`MetaVisionAOI/1.0`）**：
+  ```json
+  {
+    "schema": "MetaVisionAOI/1.0",
+    "project_id": "TestClient-SpoolAOI",
+    "version": "v1.0",
+    "timestamp": "2026-11-24T08:37:00+08:00",
+    "image": { "w": 1280, "h": 720 },
+    "classes": ["大黑軸", "小黑軸", "小白軸", "綠墊", "棧板"],
+    "summary": { "verdict": "OK", "elapsed_ms": 58.6, "counts": { "大黑軸": 6, "綠墊": 1 }, "note": "大黑軸:6, 綠墊:1" },
+    "calibration": {
+      "model": "pinhole",
+      "K": [[1120.5, 0.0, 640.0], [0.0, 1120.5, 360.0], [0.0, 0.0, 1.0]],
+      "dist": [-0.082, 0.115, 0.0, 0.0, 0.0],
+      "pixel_to_mm": null,
+      "homography": null,
+      "hand_eye_4x4": null,
+      "euler_order": "ZYX",
+      "unit": "mm"
+    },
+    "depth_assets": {
+      "depth": { "file": "20261119_001-Depth.png", "format": "uint16_png", "scale_mm": 0.1, "invalid_value": 0, "min_mm": 300.0, "max_mm": 2000.0, "aligned_to_rgb": true },
+      "pointcloud": { "file": "20261119_001.ply", "format": "ply", "unit": "mm", "frame": "camera" }
+    },
+    "rois": [
+      {
+        "id": "roi_pallet",
+        "label": "取料棧板區",
+        "class_id": null,
+        "op": "include",
+        "geom": { "type": "rect", "cx": 645.0, "cy": 402.5, "w": 810.0, "h": 595.0 },
+        "style": { "color": "#FFFF00", "width": 2, "dash": true, "visible": true },
+        "meta": {}
+      }
+    ],
+    "overlays": [
+      {
+        "id": "det_01",
+        "label": "大黑軸",
+        "class_id": 0,
+        "layer": "detect",
+        "status": "OK",
+        "score": 0.994,
+        "text": "#1 大黑軸 (412,219) 0.99",
+        "geom": { "type": "rect", "cx": 412.4, "cy": 218.7, "w": 148.0, "h": 146.0 },
+        "style": { "color": "#00E5FF", "width": 2, "fill_alpha": 0.0, "font_size": 14, "visible": true },
+        "meta": { "pose_3d_mm": [125.4, -38.2, 612.0, 0.0, 0.0, 15.2] }
+      }
+    ]
+  }
+  ```
+  - `rois[].op` 合法值：`"include"`（檢測區）、`"exclude"`（遮罩挖除區）、`"caliper"`（卡尺掃描區，方向如 `in_to_out`/`left_to_right` 與極性如 `dark_to_light` 放 `rois[].meta`）、`"gt"`（YOLO 訓練真值標註）。
+  - `depth_assets.*.file` 一律填寫**相對於本 RGB PNG 所在目錄之相對路徑且強制使用正斜線 `/`**（確保跨平台與整包搬移不斷鏈）；純 2D 案時 `calibration` 與 `depth_assets` 填 `null` 即可。
 
 ---
 
@@ -170,6 +286,6 @@ extern "C" {
    - **方案 A（Windows 離線綠色版）**：封裝 `CODER/detector.py` + 精簡純檢測介面 + 一鍵啟動 `.bat` + 環境健檢腳本。
    - **方案 B（產線機台 Watchdog）**：封裝資料夾監聽、`.tmp` Atomic Rename 防搶讀、Heartbeat 心跳與 FIFO 清理。
    - **方案 C（乾淨雲端 Space）**：建立全新無 Git 歷史的 Space 上傳最終版。
-   - **方案 D（單一原生 C++ DLL SDK — 零安裝跨語言）**：依第三節規範以單一靜態 `OpenCV 5.0`（`core, imgproc, imgcodecs, dnn` + `/MT`）搭配 `ENGINE_NEW` 內嵌 `.onnx` 權重編譯出單一 `MetaVisionAOI.dll`，附送 `MetaVisionAOI.h` / `MetaVisionAOI.cs` / `metavision_aoi.py`，並以與 Python 版一致的測試圖驗證推論數值與座標一致（且於乾淨環境驗證無外部 DLL 依賴）。
+   - **方案 D（單一原生 C++ DLL SDK — 零安裝跨語言）**：依第三節規範以統一靜態庫 `D:\opencv5_static`（`OpenCV 5.1` + `ZXing.lib` + `/MT`）搭配 `ENGINE_AUTO / ENGINE_OPENCV` 與 Win32 `RCDATA` 內嵌 `.onnx` 權重編譯出單一 `MetaVisionAOI.dll`，附送 `MetaVisionAOI.h` / `MetaVisionAOI.cs` / `metavision_aoi.py`，並以與 Python 版一致的測試圖驗證推論數值與座標一致（且必跑 `dumpbin /dependents` 確認 0 外部 DLL 依賴）。
 2. 清理開發期暫存圖與敏感測試資料（絕不打包 `projects_registry.json` 或其他客戶資料）。
 3. 驗測交付包正常運作後，將 `CODER/CODER.md` 標頭更新為 `- **Status**: \`CLOSED\``，向 Manager 回報結案完成。
