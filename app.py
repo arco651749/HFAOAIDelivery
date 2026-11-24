@@ -9,6 +9,7 @@ MetaVision AOI 多專案協作與驗收平台 (Gradio)
 """
 
 import importlib.util
+import io
 import json
 import os
 import re
@@ -29,6 +30,13 @@ from huggingface_hub import HfApi
 from PIL import Image
 
 from mcp_server import create_mcp_router
+
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except Exception:
+    genai = None
+    genai_types = None
 
 # === 全域路徑與設定 ===
 BASE_DIR = Path(__file__).parent.resolve()
@@ -633,19 +641,21 @@ def _run_detector_engine(project_id: str, img_bgr: np.ndarray) -> dict:
 
 def run_single_test(project_id: str | None, image: Image.Image | None):
     if not project_id:
-        return None, "⚠️ 請先登入專案帳號。", None, ""
+        return None, "⚠️ 請先登入專案帳號。", None, None, "", ""
     if image is None:
-        return None, "⚠️ 請先上傳一張測試圖片。", None, ""
+        return None, "⚠️ 請先上傳一張測試圖片。", None, None, "", ""
 
     st = _read_state(project_id)
     stage = st.get("stage", "WAITING_UPLOAD")
     if stage == "CLOSED":
-        return None, "📦 **此專案已驗收結案封存**，線上盲測已關閉。", None, ""
+        return None, "📦 **此專案已驗收結案封存**，線上盲測已關閉。", None, None, "", ""
     if stage != "DEPLOYED":
         return (
             None,
             f"⏳ **演算法尚未部署上線**（目前進度：`{stage}` — {st.get('note', '')}），請等待工程師完成開發並上線後再進行盲測。",
             None,
+            None,
+            "",
             "",
         )
 
@@ -663,7 +673,148 @@ def run_single_test(project_id: str | None, image: Image.Image | None):
     ver = st.get("version", "v1.0")
     ver_tag = f"\n\n*(版本：`{ver}`)*"
 
-    return Image.fromarray(vis_rgb), res["status_md"] + ver_tag, image, str(res.get("summary_label", ""))
+    return (
+        Image.fromarray(vis_rgb),
+        res["status_md"] + ver_tag,
+        image,
+        Image.fromarray(vis_rgb),
+        str(res.get("summary_label", "")),
+        "💡 純程式已完成毫秒級判定。點擊 **「🤖 請 AI 視覺覆核這張」** 可由 AI 對比原圖與標註圖檢查是否疑似漏檢或誤判（僅供覆核解說，絕不改動純程式結果）。",
+    )
+
+
+def _get_google_api_key() -> str:
+    key = (os.getenv("GOOGLE_API_KEY") or "").strip()
+    if key:
+        return key
+    env_file = BASE_DIR / ".env"
+    if env_file.exists():
+        try:
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line.startswith("GOOGLE_API_KEY="):
+                    return line.split("=", 1)[1].strip().strip('"').strip("'")
+        except Exception:
+            pass
+    return ""
+
+
+def _read_spec_brief(project_id: str, max_chars: int = 2200) -> str:
+    md_path = _project_paths(project_id)["analyst"] / "ANALYST.md"
+    if not md_path.exists():
+        return ""
+    try:
+        return md_path.read_text(encoding="utf-8")[:max_chars]
+    except Exception:
+        return ""
+
+
+def _pil_to_jpeg_bytes(img: Image.Image, max_width: int = 1024, quality: int = 86) -> bytes:
+    rgb = img.convert("RGB")
+    if rgb.width > max_width:
+        nh = int(rgb.height * (max_width / rgb.width))
+        rgb = rgb.resize((max_width, max(1, nh)), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    rgb.save(buf, format="JPEG", quality=quality)
+    return buf.getvalue()
+
+
+def _call_gemini_vision(parts: list) -> tuple[bool, str, str]:
+    """呼叫 Gemini 多模態視覺覆核（具自動備援模型鏈，嚴格僅作覆核解說、不修改純程式判定）。"""
+    if genai is None or genai_types is None:
+        return False, "", "⚠️ 本機尚未安裝 `google-genai` 套件，AI 視覺覆核員暫時離線，請直接參考上方純程式判定結果。"
+    api_key = _get_google_api_key()
+    if not api_key:
+        return False, "", "⚠️ 未設定 `GOOGLE_API_KEY`（環境變數或本機 `.env`），AI 視覺覆核員離線中，請直接參考上方純程式判定結果。"
+
+    client = genai.Client(api_key=api_key)
+    last_err = ""
+    for model_name in ("gemini-3.5-flash-lite", "gemini-4-hydrogen", "gemini-4-argon"):
+        try:
+            resp = client.models.generate_content(model=model_name, contents=parts)
+            text = (getattr(resp, "text", None) or "").strip()
+            if text:
+                return True, model_name, text
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+    return False, "", f"⚠️ AI 視覺覆核暫時忙碌或連線失敗（請直接參考純程式判定結果）。\n\n`{last_err[:240]}`"
+
+
+def run_single_ai_review(
+    project_id: str | None,
+    orig_img: Image.Image | None,
+    vis_img: Image.Image | None,
+    pred_summary: str,
+) -> str:
+    if not project_id:
+        return "⚠️ 請先登入專案帳號。"
+    if orig_img is None or vis_img is None:
+        return "⚠️ 請先於上方拖入一張圖片並完成純程式檢測後，再執行 AI 視覺覆核。"
+
+    spec_brief = _read_spec_brief(project_id)
+    prompt = (
+        f"你是 MetaVision AOI 獨立視覺覆核員（僅負責幫客戶目視核對純程式的標註有沒有疑似漏檢、過殺或分類錯誤，絕不改動純程式結果）。\n"
+        f"專案：`{project_id}`｜純程式判定摘要：`{pred_summary}`\n"
+        f"專案規格摘要：\n{spec_brief}\n\n"
+        "以下依序附上兩張圖：① 原始圖片、② 純程式標註結果圖。\n"
+        "請用精簡繁體中文條列回覆：\n"
+        "1. **覆核結論**：`✅ 看起來正確` 或 `⚠️ 疑似有誤（建議按回報修正）`\n"
+        "2. **目視核對重點**：檢查目標顆數、類別是否吻合（注意大小差異、強反光、綠墊/棧板並存、露邊是否誤框）\n"
+        "3. **建議回報說明**（僅在疑似有誤時給出一句可直接貼進「回報修正」欄的具體描述）。"
+    )
+    parts = [
+        genai_types.Part.from_bytes(data=_pil_to_jpeg_bytes(orig_img), mime_type="image/jpeg"),
+        genai_types.Part.from_bytes(data=_pil_to_jpeg_bytes(vis_img), mime_type="image/jpeg"),
+        prompt,
+    ]
+    t0 = time.perf_counter()
+    ok, model_used, text = _call_gemini_vision(parts)
+    dt = time.perf_counter() - t0
+    if not ok:
+        return text
+    return f"#### 🤖 AI 視覺覆核報告（模型：`{model_used}`｜耗時 `{dt:.1f}s`｜僅供覆核參考，不改原判定）\n\n{text}"
+
+
+def run_batch_ai_review(project_id: str | None, batch_items: list[dict] | None) -> str:
+    if not project_id:
+        return "⚠️ 請先登入專案帳號。"
+    if not batch_items:
+        return "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AI 整批覆核。"
+
+    max_imgs = 12
+    selected = batch_items[:max_imgs]
+    spec_brief = _read_spec_brief(project_id)
+    table_lines = "\n".join(
+        f"- 圖 {i+1}｜檔名：`{it['name']}`｜純程式判定：`{it['summary']}`"
+        for i, it in enumerate(selected)
+    )
+    prompt = (
+        f"你是 MetaVision AOI 獨立視覺覆核員。以下附上專案 `{project_id}` 整批盲測的 {len(selected)} 張「純程式標註結果圖」（順序對應下方清單）。\n"
+        f"純程式判定清單：\n{table_lines}\n\n"
+        f"專案規格摘要：\n{spec_brief}\n\n"
+        "請逐張仔細看圖核對標註框、類別與數量，用繁體中文輸出：\n"
+        "1. **整批覆核總結**（共檢視幾張、幾張看似正確、哪幾張疑似有誤）\n"
+        "2. **逐張覆核表**（Markdown 表格：`檔名 | 純程式判定 | AI 覆核(✅/⚠️) | 目視觀察與疑似問題`）\n"
+        "3. 若有疑似漏檢、過殺、分類錯誤或框偏，請明確點出是哪一張、建議客戶轉到模式 A 按回報修正。"
+    )
+    parts: list = []
+    for idx, it in enumerate(selected):
+        vp = Path(it["vis_path"])
+        if not vp.exists():
+            continue
+        with Image.open(vp) as im:
+            parts.append(f"【圖 {idx+1}：{it['name']}（純程式：{it['summary']}）】")
+            parts.append(genai_types.Part.from_bytes(data=_pil_to_jpeg_bytes(im, max_width=960, quality=82), mime_type="image/jpeg"))
+    parts.append(prompt)
+
+    t0 = time.perf_counter()
+    ok, model_used, text = _call_gemini_vision(parts)
+    dt = time.perf_counter() - t0
+    if not ok:
+        return text
+    extra = f"\n\n*(註：本批共 {len(batch_items)} 張，本次 AI 抽檢前 {len(selected)} 張。)*" if len(batch_items) > max_imgs else ""
+    return f"#### 🤖 AI 整批視覺覆核報告（模型：`{model_used}`｜耗時 `{dt:.1f}s`｜僅供覆核參考，不改 Excel 結果）\n\n{text}{extra}"
 
 
 def report_misjudgment(
@@ -728,19 +879,22 @@ def report_misjudgment(
 
 def run_batch_test(project_id: str | None, files):
     if not project_id:
-        return [], None, "⚠️ 請先登入專案帳號。"
+        return [], None, "⚠️ 請先登入專案帳號。", [], [], ""
     if not files:
-        return [], None, "⚠️ 請先上傳多張圖片或 `.zip` 壓縮檔。"
+        return [], None, "⚠️ 請先上傳多張圖片或 `.zip` 壓縮檔。", [], [], ""
 
     st = _read_state(project_id)
     stage = st.get("stage", "WAITING_UPLOAD")
     if stage == "CLOSED":
-        return [], None, "📦 **此專案已驗收結案封存**，線上盲測已關閉。"
+        return [], None, "📦 **此專案已驗收結案封存**，線上盲測已關閉。", [], [], ""
     if stage != "DEPLOYED":
         return (
             [],
             None,
             f"⏳ **演算法尚未部署上線**（目前進度：`{stage}` — {st.get('note', '')}），請等待工程師完成開發並上線後再進行整批盲測。",
+            [],
+            [],
+            "",
         )
 
     paths = _project_paths(project_id)
@@ -748,24 +902,36 @@ def run_batch_test(project_id: str | None, files):
     batch_ts = datetime.now().strftime("%H%M%S")
     day_dir = paths["test_uploads"] / today
     batch_dir = day_dir / f"batch_{batch_ts}"
-    batch_dir.mkdir(parents=True, exist_ok=True)
+    vis_dir = batch_dir / "vis"
+    vis_dir.mkdir(parents=True, exist_ok=True)
 
     imgs = _extract_images_from_files(files, batch_dir)
     if not imgs:
-        return [], None, "⚠️ 未找到有效圖片。"
+        return [], None, "⚠️ 未找到有效圖片。", [], [], ""
 
     rows = []
     headers = ["檔名", "辨識結果", "數值/分數", "耗時(秒)"]
     label_counter: Counter = Counter()
+    gallery_items: list[tuple[str, str]] = []
+    batch_meta: list[dict] = []
 
-    for p in imgs:
+    for idx, p in enumerate(imgs):
         img_bgr = _read_bgr_unicode(p)
         if img_bgr is None:
             continue
         res = _run_detector_engine(project_id, img_bgr)
         headers = res["headers"]
         rows.append([p.name] + list(res["row_values"]))
-        label_counter[res.get("summary_label", str(res["row_values"][0]))] += 1
+        s_label = str(res.get("summary_label", str(res["row_values"][0])))
+        label_counter[s_label] += 1
+
+        # 另存標註預覽圖至 batch_*/vis/（原圖保持 100% 乾淨無損）
+        vis_path = vis_dir / f"{idx:03d}_{p.stem}_vis.jpg"
+        ok_enc, enc_buf = cv2.imencode(".jpg", res["vis_bgr"], [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+        if ok_enc:
+            enc_buf.tofile(str(vis_path))
+            gallery_items.append((str(vis_path), f"{p.name} | {s_label}"))
+            batch_meta.append({"name": p.name, "vis_path": str(vis_path), "summary": s_label})
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -779,7 +945,8 @@ def run_batch_test(project_id: str | None, files):
 
     dist_str = " / ".join(f"{k}: {v} 張" for k, v in label_counter.items())
     summary = f"✅ 整批掃描完成（版本：`{st.get('version', 'v1.0')}`）：共 **{len(rows)}** 張（{dist_str}）"
-    return gr.update(value=rows, headers=headers), str(report_path), summary
+    ai_hint = "💡 整批掃描與相簿已就緒！點擊下方 **「🤖 請 AI 視覺覆核整批結果」** 即可由 AI 逐張看圖揪出疑似漏檢或誤判樣本。"
+    return gr.update(value=rows, headers=headers), str(report_path), summary, gallery_items, batch_meta, ai_hint
 
 
 HELP_GUIDE_MD = """
@@ -997,12 +1164,22 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                             test_output = gr.Image(type="pil", label="AOI 檢測標註結果")
                         test_status = gr.Markdown("請上傳圖片進行檢測。")
                         cached_orig = gr.State()
+                        cached_vis = gr.State()
                         cached_pred = gr.State("")
+
+                        with gr.Row():
+                            btn_single_ai = gr.Button("🤖 請 AI 視覺覆核這張（抓疑似漏檢／誤判，不改原判定）", variant="secondary")
+                        single_ai_review = gr.Markdown()
 
                         test_input.change(
                             run_single_test,
                             inputs=[current_project, test_input],
-                            outputs=[test_output, test_status, cached_orig, cached_pred],
+                            outputs=[test_output, test_status, cached_orig, cached_vis, cached_pred, single_ai_review],
+                        )
+                        btn_single_ai.click(
+                            run_single_ai_review,
+                            inputs=[current_project, cached_orig, cached_vis, cached_pred],
+                            outputs=single_ai_review,
                         )
 
                         with gr.Row():
@@ -1024,8 +1201,18 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                             file_count="multiple",
                             file_types=["image", ".zip"],
                         )
-                        btn_batch = gr.Button("🚀 開始整批掃描", variant="primary")
+                        with gr.Row():
+                            btn_batch = gr.Button("🚀 開始整批掃描", variant="primary")
+                            btn_batch_ai = gr.Button("🤖 請 AI 視覺覆核整批結果（自動揪出疑似錯判圖）", variant="secondary")
                         batch_summary = gr.Markdown()
+                        batch_ai_review = gr.Markdown()
+                        cached_batch_items = gr.State([])
+                        batch_gallery = gr.Gallery(
+                            label="🖼️ 整批盲測標註視覺相簿（點擊可放大檢視每張框選）",
+                            columns=3,
+                            height="auto",
+                            object_fit="contain",
+                        )
                         batch_table = gr.Dataframe(
                             headers=["檔名", "辨識結果", "數值/分數", "耗時(秒)"],
                             interactive=False,
@@ -1035,7 +1222,12 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                         btn_batch.click(
                             run_batch_test,
                             inputs=[current_project, batch_files],
-                            outputs=[batch_table, batch_excel, batch_summary],
+                            outputs=[batch_table, batch_excel, batch_summary, batch_gallery, cached_batch_items, batch_ai_review],
+                        )
+                        btn_batch_ai.click(
+                            run_batch_ai_review,
+                            inputs=[current_project, cached_batch_items],
+                            outputs=batch_ai_review,
                         )
 
     btn_login.click(
