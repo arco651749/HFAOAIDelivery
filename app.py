@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import sys
 import time
 import zipfile
 from collections import Counter
@@ -22,8 +23,12 @@ import cv2
 import gradio as gr
 import numpy as np
 import openpyxl
+import uvicorn
+from fastapi import FastAPI
 from huggingface_hub import HfApi
 from PIL import Image
+
+from mcp_server import create_mcp_router
 
 # === 全域路徑與設定 ===
 BASE_DIR = Path(__file__).parent.resolve()
@@ -797,12 +802,72 @@ HELP_GUIDE_MD = """
 """
 
 
+MCP_GUIDE_MD = """
+### 🤖 Remote MCP 接入說明（讓外部 AI Agent 直接操控 MetaVision AOI）
+
+本平台原生提供標準 **Remote MCP (Streamable HTTP / JSON-RPC 2.0)** 端點，讓支援 MCP 的外部 AI Agent（如 Antigravity、Claude、Cursor、企業自動化 Agent）無須操作網頁即可直接呼叫您的專屬 AOI 模型與協作流程。
+
+- **🌐 Remote MCP 端點網址**：`https://www.metavisionsystems.com/mcp`
+- **📡 傳輸協定**：`Streamable HTTP`（JSON-RPC 2.0 via `POST /mcp`；`GET /mcp` 可查看服務狀態）
+- **🔑 認證方式（與網頁登入同一組帳密，單一專案 100% 隔離）**：
+  - **推薦（HTTP Header）**：`Authorization: Bearer <專案帳號>:<專屬密碼>`（例如 `Bearer TestClient-SpoolAOI:你的密碼`）
+  - **備用（工具參數）**：若客戶端不便設定 Header，亦可直接於工具呼叫參數傳入 `project_id` 與 `password`
+
+---
+
+#### 📋 MCP 客戶端設定範例（直接複製貼上即可使用）
+```json
+{
+  "mcpServers": {
+    "metavision-aoi": {
+      "url": "https://www.metavisionsystems.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <客戶名稱>-<客戶專案>:<您的專屬密碼>"
+      }
+    }
+  }
+}
+```
+
+---
+
+#### 🛠️ 開放給外部 AI Agent 的 7 支標準 MCP Tools
+
+| Tool 名稱 | 權限 | 功能說明 |
+| :--- | :---: | :--- |
+| `aoi_request_project` | 免登入 | 線上申請開通新專案（進入人工審核，開通後寄發帳密至 Email） |
+| `aoi_get_status` | 需帳密 | 查詢專案即時進度（`stage`）、部署版本（`version`）與是否有待回覆問題 |
+| `aoi_upload_sample` | 需帳密 | 上傳 Base64 訓練樣本圖（`Auto` / `OK` / `NG`），可一併帶入需求說明通知分析師 |
+| `aoi_get_discuss` | 需帳密 | 讀取分頁二分析師發布的待確認問題與歷史 Q&A 紀錄 |
+| `aoi_reply_discuss` | 需帳密 | 替客戶回覆分頁二規格確認問題（支援夾帶 Base64 補充圖片或文件附件） |
+| `aoi_detect_image` | 需帳密 | 呼叫已上線（`DEPLOYED`）之專案演算法進行單張推論（支援 `image_base64` 或公開 `image_url`），回傳結構化 JSON 類別、數量、座標與耗時（設 `return_annotated_image: true` 可同步取得標註圖） |
+| `aoi_report_misjudgment` | 需帳密 | 回報盲測判錯原圖與正確說明，自動寫入錯判修正佇列觸發下一輪升版 |
+
+---
+
+#### ⚡ 一行指令快速測試連通性 (`curl`)
+```bash
+# 1. 查詢服務資訊與可用工具列表
+curl -s https://www.metavisionsystems.com/mcp
+
+# 2. 透過 MCP JSON-RPC 查詢專案狀態（替換為您的帳密）
+curl -s -X POST https://www.metavisionsystems.com/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer TestClient-SpoolAOI:YOUR_PASSWORD" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"aoi_get_status","arguments":{}}}'
+```
+"""
+
+
 # === Gradio 介面 ===
 with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
     current_project = gr.State(None)
 
     with gr.Accordion("📖 平台使用說明與 AOI 合作流程 (Help — 點此展開 / 收合)", open=False):
         gr.Markdown(HELP_GUIDE_MD)
+
+    with gr.Accordion("🤖 Remote MCP 接入指南（給外部 AI Agent 連線使用 — 點此展開 / 收合）", open=False):
+        gr.Markdown(MCP_GUIDE_MD)
 
     # --- 登入與新專案申請畫面 ---
     with gr.Column(visible=True) as auth_panel:
@@ -992,8 +1057,16 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
         outputs=[current_project, login_msg, auth_panel, main_panel],
     )
 
+# === FastAPI + Remote MCP (/mcp) + Gradio 單一入口整合 ===
+fastapi_app = FastAPI(title="MetaVision AOI Portal & Remote MCP")
+fastapi_app.include_router(create_mcp_router(sys.modules[__name__]))
+fastapi_app = gr.mount_gradio_app(fastapi_app, demo, path="/")
+
+
 if __name__ == "__main__":
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=SERVER_PORT,
+    uvicorn.run(
+        fastapi_app,
+        host="0.0.0.0",
+        port=SERVER_PORT,
+        log_level="info",
     )
