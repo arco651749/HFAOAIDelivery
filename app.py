@@ -672,7 +672,7 @@ def run_single_test(project_id: str | None, image: Image.Image | None):
         image,
         Image.fromarray(vis_rgb),
         str(res.get("summary_label", "")),
-        "💡 純程式已完成毫秒級判定。點擊 **「🤖 請 AGY 視覺覆核這張」** 可由本機 Antigravity 覆核員 (`aoi_reviewer`) 對比原圖與標註圖細心檢查，並說明後續處理方式（絕不改動純程式結果）。",
+        "⏳ **🤖 AGY 視覺覆核員 (`aoi_reviewer`) 正在自動細心看圖覆核中...** *(上方純程式結果已即時顯示，請稍候約 15～30 秒)*",
     )
 
 
@@ -699,11 +699,28 @@ def run_single_ai_review(
     return review_single(project_id, orig_img, vis_img, pred_summary, _read_spec_brief(project_id))
 
 
+def run_single_ai_review_auto(
+    project_id: str | None,
+    orig_img: Image.Image | None,
+    vis_img: Image.Image | None,
+    pred_summary: str,
+) -> str:
+    if not project_id or orig_img is None or vis_img is None:
+        return ""
+    return review_single(project_id, orig_img, vis_img, pred_summary, _read_spec_brief(project_id))
+
+
 def run_batch_ai_review(project_id: str | None, batch_items: list[dict] | None) -> str:
     if not project_id:
         return "⚠️ 請先登入專案帳號。"
     if not batch_items:
         return "⚠️ 請先執行「🚀 開始整批掃描」產生盲測標註圖後，再進行 AGY 整批覆核。"
+    return review_batch(project_id, batch_items, _read_spec_brief(project_id))
+
+
+def run_batch_ai_review_auto(project_id: str | None, batch_items: list[dict] | None) -> str:
+    if not project_id or not batch_items:
+        return ""
     return review_batch(project_id, batch_items, _read_spec_brief(project_id))
 
 
@@ -835,7 +852,7 @@ def run_batch_test(project_id: str | None, files):
 
     dist_str = " / ".join(f"{k}: {v} 張" for k, v in label_counter.items())
     summary = f"✅ 整批掃描完成（版本：`{st.get('version', 'v1.0')}`）：共 **{len(rows)}** 張（{dist_str}）"
-    ai_hint = "💡 整批掃描與相簿已就緒！點擊下方 **「🤖 請 AI 視覺覆核整批結果」** 即可由 AI 逐張看圖揪出疑似漏檢或誤判樣本。"
+    ai_hint = "⏳ **🤖 AGY 視覺覆核員 (`aoi_reviewer`) 正在自動逐張檢視本批標註圖並撰寫覆核總表...** *(下方相簿與 Excel 報表已就緒，可先檢視)*"
     return gr.update(value=rows, headers=headers), str(report_path), summary, gallery_items, batch_meta, ai_hint
 
 
@@ -1065,6 +1082,10 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                             run_single_test,
                             inputs=[current_project, test_input],
                             outputs=[test_output, test_status, cached_orig, cached_vis, cached_pred, single_ai_review],
+                        ).then(
+                            run_single_ai_review_auto,
+                            inputs=[current_project, cached_orig, cached_vis, cached_pred],
+                            outputs=single_ai_review,
                         )
                         btn_single_ai.click(
                             run_single_ai_review,
@@ -1113,6 +1134,10 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                             run_batch_test,
                             inputs=[current_project, batch_files],
                             outputs=[batch_table, batch_excel, batch_summary, batch_gallery, cached_batch_items, batch_ai_review],
+                        ).then(
+                            run_batch_ai_review_auto,
+                            inputs=[current_project, cached_batch_items],
+                            outputs=batch_ai_review,
                         )
                         btn_batch_ai.click(
                             run_batch_ai_review,
