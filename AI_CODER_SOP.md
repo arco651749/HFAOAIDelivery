@@ -183,7 +183,23 @@ extern "C" {
    - 統一使用 **`zxing-cpp`**（Python `import zxingcpp`；C++ 靜態連結 `D:\opencv5_static\lib\ZXing.lib`）。
    - 大圖小碼或雷雕 DPM 必走三段式：**OpenCV 5.1（YOLO 或梯度密集區）切出碼區 ROI ➔ `imgproc` 強化（CLAHE 對比增強 / 反相 / 形態學閉運算連接點陣）➔ `zxing-cpp` 毫秒級解碼並輸出字串與四角點座標**。
 
-### 3.5 無損 PNG Metadata 統一資料結構（`MetaVisionAOI/1.0`）
+### 3.5 傳統機器視覺演算法理論地圖（按需查閱 `REFERENCE/NI_VISION_CONCEPT/`，以 OpenCV 5.1 實作）
+當遇到複雜光照、週期性紋理、重疊粒子、固定圖樣比對或精密座標系跟隨等傳統 CV 難題時，**切忌盲目硬套 YOLO 或粗糙的 `Canny + findContours`**。`aoi_coder` 可按需唯讀查閱專案內建之 [REFERENCE/NI_VISION_CONCEPT/README.md](./REFERENCE/NI_VISION_CONCEPT/README.md)（399 頁原廠概念手冊 22 章 Markdown 版）借鏡經典數學模型與邊界心法，**並嚴守 3.1 白名單以 OpenCV 5.1 / `zxing-cpp` 實作（嚴禁引入 `nivision.dll`）**：
+
+| 實務演算法難題 | 按需查閱章節（`REFERENCE/NI_VISION_CONCEPT/`） | OpenCV 5.1 對應實作核心 |
+| :--- | :--- | :--- |
+| **光照不均、低對比、週期性背景紋理** | `Chapter_04_Image_Analysis.md`（直方圖/Line Profile）<br>`Chapter_05_Image_Processing.md`（LUT/濾波/灰階形態學）<br>`Chapter_07_Frequency_Domain_Analysis.md`（FFT 頻域濾波） | `cv2.createCLAHE`、`cv2.morphologyEx`（`TOPHAT`/`BLACKHAT` 去不均勻背景）、`cv2.dft` 陷波濾波去週期紋理 |
+| **影像分割、二值化與重疊粒子分離** | `Chapter_08_Image_Segmentation.md`（全域/局部/形態學分割）<br>`Chapter_09_Binary_Morphology.md`（結構元素/連通性/填洞/骨架） | `cv2.threshold(OTSU)`、`cv2.adaptiveThreshold`、`cv2.distanceTransform` ＋ `cv2.watershed` 分離黏連目標 |
+| **瑕疵/粒子幾何特徵篩選與分類** | `Chapter_10_Particle_Measurements.md`（面積/圓度/長寬比/慣性矩）<br>`Chapter_16_Binary_Particle_Classification.md` | `cv2.connectedComponentsWithStats`、`cv2.moments`、`cv2.minAreaRect`（計算真圓度、矩形度、主軸角） |
+| **畸變校正、座標系跟隨 (Fixture) 與量測** | `Chapter_03_System_Setup_and_Calibration.md`<br>`Chapter_11_Edge_Detection.md`<br>`Chapter_14_Dimensional_Measurements.md` | `findChessboardCornersSB` / `remap`、先找基準點建立相對座標轉換矩陣，再對齊量測 ROI 做 1D 亞像素卡尺 |
+| **模板匹配 vs 幾何輪廓匹配** | `Chapter_12_Pattern_Matching.md`（灰階 NCC 金字塔）<br>`Chapter_13_Geometric_Matching.md`（抗旋轉/縮放/遮擋） | 影像金字塔 + `cv2.matchTemplate(TM_CCOEFF_NORMED)`，或梯度邊緣方向特徵匹配（權衡見 [Pattern_Matching_vs_Geometric_Matching.md](./REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md)） |
+| **抗亮度干擾之色彩檢測與色差判別** | `Chapter_15_Color_Inspection.md`（色彩空間/色彩光譜比對） | `cv2.cvtColor(BGR2HSV / BGR2Lab)` 分離亮度與色度通道、Lab $\Delta E$ 色差或色相直方圖比對 |
+| **印刷/標籤/固定結構瑕疵（黃金樣板比對）** | `Chapter_17_Golden_Template_Comparison.md`（對齊＋邊緣寬容帶＋亮暗瑕疵雙閾值） | `warpAffine` / `findTransformECC` 精準對齊 ➔ 樣板邊緣膨脹建立忽略帶（防亞像素位移誤報）➔ 正負差值分離亮/暗瑕疵 |
+| **字元/條碼前處理與濾波核查表** | `Chapter_18_Optical_Character_Recognition.md`<br>`Chapter_19_Instrument_Readers.md`<br>`Appendix_A_Kernels.md` | 借鏡字元切割與條碼對比強化心法；讀碼實作統一用 `zxing-cpp`，OCR 採輕量 ONNX 模型 |
+
+- **進階權衡速查（唯讀）**：二值化選型見 [REFERENCE/wiki/comparisons/Thresholding_Methods_Comparison.md](./REFERENCE/wiki/comparisons/Thresholding_Methods_Comparison.md)；模板 vs 幾何匹配見 [REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md](./REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md)。
+
+### 3.6 無損 PNG Metadata 統一資料結構（`MetaVisionAOI/1.0`）
 為確保**永不破壞原始影像像素**（方便未來重訓、換演算法回放與無損縮放檢視），歸檔與交付用 PNG 一律保留 100% 無損原圖，並將 **ROI（輸入區／YOLO 真值標註）**、**Overlay（演算法輸出疊圖）**、**相機校正 (`calibration`)** 與 **深度／點雲連結 (`depth_assets`)** 寫入 PNG 標準 **`iTXt` Chunk**（UTF-8 原生支援繁體中文，嚴禁使用僅支援 Latin-1 的 `tEXt`）：
 
 - **Chunk Keyword**：`MetaVisionAOI`（UTF-8 JSON；大資料量可啟用 `iTXt` zlib 壓縮）。
