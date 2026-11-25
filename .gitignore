@@ -19,6 +19,7 @@ data/
 demo_assets/
 test_logs/
 _agy_review_tmp/
+_patrol_seen.json
 IO_FLOW_DEMO.html
 build_io_demo.py
 
