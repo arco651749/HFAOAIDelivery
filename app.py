@@ -31,6 +31,7 @@ from PIL import Image
 
 from agy_reviewer import create_agy_bridge_router, review_batch, review_single
 from mcp_server import create_mcp_router
+from patrol_notifier import run_patrol
 
 # === 全域路徑與設定 ===
 BASE_DIR = Path(__file__).parent.resolve()
@@ -1303,7 +1304,23 @@ fastapi_app.include_router(create_agy_bridge_router())
 fastapi_app = gr.mount_gradio_app(fastapi_app, demo, path="/")
 
 
+# === 背景每分鐘零 Token 巡檢執行緒（09:00~18:00 自動掃描新申請/樣本/回覆/錯判並推 Telegram）===
+def _start_patrol_thread() -> None:
+    def _loop() -> None:
+        while True:
+            try:
+                now_h = datetime.now().hour
+                if 9 <= now_h < 18:
+                    run_patrol()
+            except Exception as exc:
+                print(f"[Patrol] error: {exc}", flush=True)
+            time.sleep(60)
+
+    threading.Thread(target=_loop, daemon=True, name="MetaVisionPatrol").start()
+
+
 if __name__ == "__main__":
+    _start_patrol_thread()
     uvicorn.run(
         fastapi_app,
         host="0.0.0.0",
