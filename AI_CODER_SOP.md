@@ -121,7 +121,7 @@ extern "C" {
 
     // 2. 記憶體影像直接推論（推薦產線相機零寫碟高速呼叫）
     //    img_data: 影像資料起始指標（void* 直接相容 uint8* / uint16* / float* / C# IntPtr）
-    //    pixel_format: 見 MV_PixelFormat 列舉（GRAY8/BGR8/BGRA8/GRAY16/BGR16/FLOAT32）
+    //    pixel_format: 見 MV_PixelFormat 列舉（GRAY8/BGR8/BGRA8/GRAY16/BGR16/FLOAT32/FLOAT32_3CH）
     //    stride: 每列位元組數 bytes（傳 0 視為緊湊 width * bytes_per_pixel）
     //    回傳值：0=成功；>0=out_json_buf 空間不足（回傳所需位元組數，含結尾 '\0'）；<0=錯誤碼
     MV_API int MV_Detect(
@@ -195,9 +195,10 @@ extern "C" {
 | **模板匹配 vs 幾何輪廓匹配** | `Chapter_12_Pattern_Matching.md`（灰階 NCC 金字塔）<br>`Chapter_13_Geometric_Matching.md`（抗旋轉/縮放/遮擋） | 影像金字塔 + `cv2.matchTemplate(TM_CCOEFF_NORMED)`，或梯度邊緣方向特徵匹配（權衡見 [Pattern_Matching_vs_Geometric_Matching.md](./REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md)） |
 | **抗亮度干擾之色彩檢測與色差判別** | `Chapter_15_Color_Inspection.md`（色彩空間/色彩光譜比對） | `cv2.cvtColor(BGR2HSV / BGR2Lab)` 分離亮度與色度通道、Lab $\Delta E$ 色差或色相直方圖比對 |
 | **印刷/標籤/固定結構瑕疵（黃金樣板比對）** | `Chapter_17_Golden_Template_Comparison.md`（對齊＋邊緣寬容帶＋亮暗瑕疵雙閾值） | `warpAffine` / `findTransformECC` 精準對齊 ➔ 樣板邊緣膨脹建立忽略帶（防亞像素位移誤報）➔ 正負差值分離亮/暗瑕疵 |
-| **字元/條碼前處理與濾波核查表** | `Chapter_18_Optical_Character_Recognition.md`<br>`Chapter_19_Instrument_Readers.md`<br>`Appendix_A_Kernels.md` | 借鏡字元切割與條碼對比強化心法；讀碼實作統一用 `zxing-cpp`，OCR 採輕量 ONNX 模型 |
+| **字元/條碼前處理與讀碼增強** | `Chapter_18_Optical_Character_Recognition.md`<br>`Chapter_19_Instrument_Readers.md` | 借鏡字元切割與條碼對比強化心法；讀碼實作統一用 `zxing-cpp`，OCR 採輕量 ONNX 模型（濾波核直接用 OpenCV `Sobel`/`Scharr`/`getStructuringElement`，勿依賴轉檔直排的 `Appendix_A_Kernels.md`） |
 
-- **進階權衡速查（唯讀）**：二值化選型見 [REFERENCE/wiki/comparisons/Thresholding_Methods_Comparison.md](./REFERENCE/wiki/comparisons/Thresholding_Methods_Comparison.md)；模板 vs 幾何匹配見 [REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md](./REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md)。
+- **進階權衡速查（唯讀）**：二值化選型見 [REFERENCE/wiki/comparisons/Thresholding_Methods_Comparison.md](./REFERENCE/wiki/comparisons/Thresholding_Methods_Comparison.md)；模板 vs 幾何匹配見 [REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md](./REFERENCE/wiki/comparisons/Pattern_Matching_vs_Geometric_Matching.md)；六大任務分流與「規則快篩 ➔ AI 精判」兩段式架構見 [REFERENCE/wiki/syntheses/Pragmatic_Industrial_Vision_Toolbox.md](./REFERENCE/wiki/syntheses/Pragmatic_Industrial_Vision_Toolbox.md)。
+- **上游殘留防呆**：`REFERENCE/wiki/` 與 `NI_VISION_CONCEPT/README.md` 內若出現 `[[...]]` 雙括號、`VDMAPI`、`../index.md` 或非白名單工具（NI VDM / TensorRT / WeChatQRCode / Anomalib / Open3D），**一律忽略斷鏈，僅借鏡數學與架構思維並映射回 3.1 標準棧（OpenCV 5.1 + `zxing-cpp` + ONNX `cv::dnn`）**。
 
 ### 3.6 無損 PNG Metadata 統一資料結構（`MetaVisionAOI/1.0`）
 為確保**永不破壞原始影像像素**（方便未來重訓、換演算法回放與無損縮放檢視），歸檔與交付用 PNG 一律保留 100% 無損原圖，並將 **ROI（輸入區／YOLO 真值標註）**、**Overlay（演算法輸出疊圖）**、**相機校正 (`calibration`)** 與 **深度／點雲連結 (`depth_assets`)** 寫入 PNG 標準 **`iTXt` Chunk**（UTF-8 原生支援繁體中文，嚴禁使用僅支援 Latin-1 的 `tEXt`）：

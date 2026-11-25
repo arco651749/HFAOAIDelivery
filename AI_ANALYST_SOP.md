@@ -117,11 +117,12 @@ projects/<客戶名稱>-<客戶專案>/
 - **打光決策矩陣**：[REFERENCE/wiki/comparisons/Illumination_Techniques_Comparison.md](./REFERENCE/wiki/comparisons/Illumination_Techniques_Comparison.md)
 - **光學與打光整合排錯指南**：[REFERENCE/wiki/syntheses/Optics_and_Lighting_Integration_Guide.md](./REFERENCE/wiki/syntheses/Optics_and_Lighting_Integration_Guide.md)
 - **相機與鏡頭選型（Basler dart + 定焦/微距）**：[REFERENCE/wiki/concepts/Camera_and_Lens_Selection.md](./REFERENCE/wiki/concepts/Camera_and_Lens_Selection.md)
-  - 需精算 FOV / 空間解析度 / 反向推薦鏡頭時，可於專案根目錄唯讀執行：
-    `python -X utf8 REFERENCE/Camera_and_Lens/optics_calculator.py recommend --fov-w <寬mm> --fov-h <高mm> --wd <工作距離mm> --shutter Global --top 5`
+  - 需精算 FOV / 空間解析度 / 反向推薦鏡頭時，可於專案根目錄**唯讀**執行（可加 `--max-res <mm/px>` 代入 3.1 節奈奎斯特底線；**嚴禁執行會寫入資料庫的 `add-camera`**）：
+    `python -X utf8 REFERENCE/Camera_and_Lens/optics_calculator.py recommend --fov-w <寬mm> --fov-h <高mm> --wd <工作距離mm> --max-res <mm/px> --shutter Global --top 5`
 - **遠心光學比較**：[REFERENCE/wiki/comparisons/Standard_vs_Telecentric_Lighting.md](./REFERENCE/wiki/comparisons/Standard_vs_Telecentric_Lighting.md)
 - **工業光源硬體型錄（需建議實體燈型時）**：[REFERENCE/wiki/hardware/Chenxuan_Lighting_Catalog.md](./REFERENCE/wiki/hardware/Chenxuan_Lighting_Catalog.md)、[REFERENCE/wiki/hardware/Bestin_Lighting_Catalog.md](./REFERENCE/wiki/hardware/Bestin_Lighting_Catalog.md)
 - **務實工業視覺工具選型**：[REFERENCE/wiki/syntheses/Pragmatic_Industrial_Vision_Toolbox.md](./REFERENCE/wiki/syntheses/Pragmatic_Industrial_Vision_Toolbox.md)
+- **防呆備註**：`REFERENCE/wiki/` 原自上游 NI 視覺筆記移入，內文若出現舊路徑（如 `NIVDM`）、`[[Wikilink]]` 雙括號或 NI VDM / TensorRT / WeChatQRCode 提及，**一律忽略殘留連結，並以 3.3 節本專案標準棧（OpenCV 5.1 + `zxing-cpp` + ONNX）為準**；`REFERENCE/NI_VISION_CONCEPT/` 偏演算法底層原理，SA 優先查閱上述 `wiki/` 與 `optics_calculator.py` 即可。
 
 ---
 
@@ -134,7 +135,7 @@ projects/<客戶名稱>-<客戶專案>/
 
 ### Step 2：多模態實地看圖分析
 1. **必須**使用 `read_file` 實地讀取各類別具代表性的訓練樣本圖（以及若有的 `ANALYST/attachments/<YYYY-MM-DD>/` 附件），絕不可只憑檔名臆測。
-2. 客觀記錄影像解析度、光學條件、目標特徵與潛在干擾源。
+2. 客觀記錄影像解析度、光學條件、目標特徵與潛在干擾源，並依**第三節（3.1～3.3）**完成解析度奈奎斯特底線、打光異常診斷與技術路線可行性評估。
 
 ### Step 3：撰寫 `ANALYST/ANALYST.md` 並向 Manager 回報
 - 統一採用 `- **Status**: \`<狀態>\`` 標頭格式，合法狀態共 4 種：
