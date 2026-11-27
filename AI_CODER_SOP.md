@@ -86,6 +86,22 @@ projects/<客戶名稱>-<客戶專案>/
    - 嚴禁將 10–30 MB `.onnx` 轉為 `const unsigned char[]` C 文字陣列（會暴增破百 MB 導致 MSVC `C1060 out of heap space`）。
    - 一律透過 **Win32 Resource (`.rc` `RCDATA`)** 將 `.onnx`（可做 XOR/AES 混淆）直接打包進 `MetaVisionAOI.dll`，執行期以 `FindResourceW` / `LoadResource` / `LockResource` 取得記憶體指標與長度，直接傳入 `cv::dnn::readNetFromONNX(ptr, size)`（預設 `ENGINE_AUTO` 即啟用 OpenCV 5.1 新圖引擎）——依然 **100% 單一 `.dll`**、3 秒編完且零記憶體拷貝。
 
+#### 3.2.1 GPU 加速專案：LiteRT (`.tflite`) 轉檔與 Windows 交付避坑規範（已實測驗證）
+當客戶端明確要求 GPU 加速時，統一選用 **LiteRT (`ai-edge-litert ≥ 2.4`) + FP16 `.tflite`**（走 Windows 內建 Direct3D 12 WebGPU，**完全免裝 CUDA**，跨 NVIDIA / AMD / Intel 顯卡皆可 100% 全圖 GPU 加速；純 CPU 專案仍維持 OpenCV 5.1，實測 CPU 速度快約 36% 且可真單檔）。實作時必須遵守以下實測避坑鐵則：
+1. **轉檔工具嚴禁污染主環境（必用獨立 `.venv`）**：
+   - `onnx2tf` 會強制鎖定舊版 `opencv-python`（如 `4.13`）與 `numpy`，**絕對不可安裝於本機主力 `C:\Python312`**，必須建立獨立轉檔用 `.venv`（安裝 `onnx2tf` + `tensorflow` + `tf_keras`）。
+2. **轉檔必加 `-tb tf_converter`（禁用預設 `flatbuffer_direct`）**：
+   - `onnx2tf 2.6.x` 預設的實驗性 `flatbuffer_direct` 後端會錯誤推導 YOLO 輸出 shape 導致推論崩潰；標準指令一律為：
+     ```powershell
+     onnx2tf -i model.onnx -o tflite_out -tb tf_converter -n
+     ```
+   - 優先選用產出的 **`model_float16.tflite`**（模型體積減半、首次 Shader 編譯耗時減半，與 FP32 在 WebGPU 上精度一致，中心誤差 ≤ 0.5 px）。
+   - **輸入張量格式注意**：轉出的 `.tflite` 輸入為 **NHWC `(1, H, W, 3)`**（RGB `float32` 歸一化），前處理不需再做 `HWC → CHW` 轉置。
+3. **Windows GPU 交付必附 4 顆 DLL 與初始化暖機**：
+   - `ai-edge-litert` 內附 `libLiteRt.dll` 與 `libLiteRtWebGpuAccelerator.dll`，但**未打包** DirectX Shader Compiler；若缺少會報 `DynamicLib.Open: dxcompiler.dll Windows Error: 87`（單純加 `PATH` 無效）。
+   - Windows GPU 交付包（Python / C++ 皆同）**必須於執行檔 / DLL 同目錄隨附** Windows SDK 的 **`dxcompiler.dll` 與 `dxil.dll`**，並於 `MV_Create()` / 啟動初始化時執行 **3 次 dummy 推論暖機（warmup）**，以完成首次 WebGPU Compute Shader 編譯並拉起 GPU 時脈進入穩態（約 10 ms 級）。
+   - 若遇極少數冷門算子導致 `.tflite` 轉檔或 GPU Delegate 失敗，備援切換至 **ONNX Runtime + DirectML**（同樣免裝 CUDA、直吃 `.onnx`）。
+
 ### 3.3 統一跨語言 C ABI 匯出介面 (`extern "C"`)
 所有單檔 DLL 一律匯出純 C ABI（零 C++ Name Mangling、零 STL 跨邊界問題），輸入支援「記憶體連續影像指標（涵蓋 8-bit 灰階/彩色、**16-bit 工業高動態灰階與深度圖**、32-bit 浮點高度圖）」與「UTF-8 圖檔路徑」，輸出統一為 **UTF-8 JSON 字串**：
 
