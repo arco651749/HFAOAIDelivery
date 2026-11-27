@@ -1149,7 +1149,7 @@ LANDING_HERO_HTML = """
 
 
 # === Gradio 介面 ===
-with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台", head=_build_gtag_head()) as demo:
+with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
     current_project = gr.State(None)
 
     with gr.Accordion("📖 平台使用說明與 AOI 合作流程 (Help — 點此展開 / 收合)", open=False):
@@ -1160,7 +1160,7 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台", head=_build_g
 
     # --- 登入與新專案申請畫面 ---
     with gr.Column(visible=True) as auth_panel:
-        gr.HTML(LANDING_HERO_HTML)
+        gr.Markdown(LANDING_HERO_HTML)
         with gr.Row():
             with gr.Column():
                 gr.Markdown("### 🔑 已有專案帳號？請由此登入")
