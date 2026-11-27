@@ -21,7 +21,8 @@ COPY --chown=user:user requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=user:user app.py mcp_server.py agy_reviewer.py manage_project.py AI_REVIEWER_SOP.md ./
+COPY --chown=user:user app.py mcp_server.py agy_reviewer.py manage_project.py patrol_notifier.py notify_director.py AI_REVIEWER_SOP.md ./
+COPY --chown=user:user static_assets ./static_assets
 
 EXPOSE 7860
 CMD ["python", "app.py"]

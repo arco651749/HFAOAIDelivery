@@ -26,6 +26,7 @@ import numpy as np
 import openpyxl
 import uvicorn
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from huggingface_hub import HfApi
 from PIL import Image
 
@@ -45,6 +46,10 @@ PENDING_DIR.mkdir(parents=True, exist_ok=True)
 
 HF_TOKEN = os.getenv("HF_TOKEN", "")
 SERVER_PORT = int(os.getenv("PORT", "7860" if os.getenv("SPACE_ID") else "8088"))
+GOOGLE_ADS_ID = os.getenv("GOOGLE_ADS_ID", "").strip()
+GOOGLE_ADS_CONVERSION_LABEL = os.getenv("GOOGLE_ADS_CONVERSION_LABEL", "").strip()
+STATIC_ASSETS_DIR = BASE_DIR / "static_assets"
+STATIC_ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 
@@ -1061,8 +1066,90 @@ curl -s -X POST https://www.metavisionsystems.com/mcp \
 """
 
 
+def _build_gtag_head() -> str:
+    if not GOOGLE_ADS_ID:
+        return ""
+    return (
+        f'<script async src="https://www.googletagmanager.com/gtag/js?id={GOOGLE_ADS_ID}"></script>'
+        "<script>"
+        "window.dataLayer = window.dataLayer || [];"
+        "function gtag(){dataLayer.push(arguments);}"
+        "gtag('js', new Date());"
+        f"gtag('config', '{GOOGLE_ADS_ID}');"
+        "</script>"
+    )
+
+
+def _build_conversion_js() -> str:
+    if not GOOGLE_ADS_ID or not GOOGLE_ADS_CONVERSION_LABEL:
+        return "(msg) => msg"
+    send_to = f"{GOOGLE_ADS_ID}/{GOOGLE_ADS_CONVERSION_LABEL}"
+    return (
+        "(msg) => {"
+        "  try {"
+        f"    if (typeof msg === 'string' && msg.includes('📩') && typeof window.gtag === 'function') {{"
+        f"      window.gtag('event', 'conversion', {{ 'send_to': '{send_to}' }});"
+        "    }"
+        "  } catch (e) {}"
+        "  return msg;"
+        "}"
+    )
+
+
+LANDING_HERO_HTML = """
+<div style="border-radius:16px;padding:28px 28px 24px 28px;background:linear-gradient(135deg,#0f172a 0%,#1e293b 60%,#0c4a6e 100%);color:#f8fafc;box-shadow:0 10px 30px rgba(15,23,42,0.22);margin-bottom:14px;">
+  <div style="display:inline-block;padding:4px 12px;border-radius:999px;background:rgba(56,189,248,0.18);border:1px solid rgba(56,189,248,0.45);color:#7dd3fc;font-size:12px;font-weight:700;letter-spacing:0.8px;margin-bottom:10px;">
+    METAVISION AOI PLATFORM ｜ 工業級 AI 視覺檢測交付平台
+  </div>
+  <h1 style="margin:0 0 10px 0;font-size:28px;line-height:1.3;color:#ffffff;font-weight:800;">
+    僅需 12 張產線圖即可起步・免 GPU 0.08 秒/張高速辨識
+  </h1>
+  <p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:#cbd5e1;max-width:960px;">
+    專為工廠<b>瑕疵檢測、精密定位、目標計數與 DataMatrix / QR 工業讀碼</b>打造。無需自行標註或購買昂貴顯卡，只要上傳產線實拍圖即可免費驗證；正式版支援<b> 100% 斷網單檔 C++ DLL</b>、離線綠色版與產線 Watchdog 自動交付。
+  </p>
+
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:20px;">
+    <div style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;">
+      <div style="font-size:20px;font-weight:800;color:#38bdf8;">12 張起步</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">極少樣本自動標註與合成擴增</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;">
+      <div style="font-size:20px;font-weight:800;color:#34d399;">0.085 秒 / 張</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">免顯卡一般工控機 CPU 毫秒推論</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;">
+      <div style="font-size:20px;font-weight:800;color:#fbbf24;">100% 斷網單檔 DLL</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">支援 C# / C++ / Python 零安裝呼叫</div>
+    </div>
+    <div style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;">
+      <div style="font-size:20px;font-weight:800;color:#f472b6;">獨立隔離・可清檔</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">全程 HTTPS 加密、絕不跨客戶訓練</div>
+    </div>
+  </div>
+
+  <div style="font-size:13px;font-weight:700;color:#93c5fd;margin-bottom:8px;">
+    🎯 真實產線盲測成果展示（機械手臂取料站：僅 12 張訓練圖 ➔ 9 張未見過實拍 0.76 秒全數檢出 5 類並存）
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;">
+    <div style="background:#0b1220;border:1px solid rgba(148,163,184,0.28);border-radius:10px;overflow:hidden;">
+      <img src="/assets/showcase_1.jpg" alt="MetaVision AOI 實拍盲測展示 1" style="width:100%;height:auto;display:block;" />
+      <div style="padding:8px 12px;font-size:12px;color:#cbd5e1;">
+        ✅ <b>取料中途多目標並存</b>：同時精準框出線軸與底層綠墊並輸出機械手臂中心座標 (cx, cy)
+      </div>
+    </div>
+    <div style="background:#0b1220;border:1px solid rgba(148,163,184,0.28);border-radius:10px;overflow:hidden;">
+      <img src="/assets/showcase_2.jpg" alt="MetaVision AOI 實拍盲測展示 2" style="width:100%;height:auto;display:block;" />
+      <div style="padding:8px 12px;font-size:12px;color:#cbd5e1;">
+        ✅ <b>抗強反光與站外干擾</b>：自動排除環境雜訊，單張純 CPU 耗時 &lt; 0.09 秒並一鍵產出 Excel 報表
+      </div>
+    </div>
+  </div>
+</div>
+"""
+
+
 # === Gradio 介面 ===
-with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
+with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台", head=_build_gtag_head()) as demo:
     current_project = gr.State(None)
 
     with gr.Accordion("📖 平台使用說明與 AOI 合作流程 (Help — 點此展開 / 收合)", open=False):
@@ -1073,12 +1160,7 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
 
     # --- 登入與新專案申請畫面 ---
     with gr.Column(visible=True) as auth_panel:
-        gr.Markdown(
-            """
-            # 🔐 MetaVision AOI 客戶專案登入入口
-            每個專案皆有獨立的專屬帳號（格式：**`<客戶名稱>-<客戶專案>`**）與加密密碼，確保您的產線影像資料 100% 獨立隔離。
-            """
-        )
+        gr.HTML(LANDING_HERO_HTML)
         with gr.Row():
             with gr.Column():
                 gr.Markdown("### 🔑 已有專案帳號？請由此登入")
@@ -1087,24 +1169,29 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
                     placeholder="例如：TestClient-PartsAOI",
                 )
                 login_pw = gr.Textbox(label="專屬密碼", type="password", placeholder="請輸入信箱收到的密碼")
-                btn_login = gr.Button("🔓 登入專案", variant="primary")
+                btn_login = gr.Button("🔓 登入專案", variant="secondary")
                 login_msg = gr.Markdown()
 
             with gr.Column():
-                gr.Markdown("### 🆕 尚未開通專案？線上申請帳號")
-                gr.Markdown("若查無您的專案帳號，請填寫以下資訊，審核開通後我們將把**專屬密碼寄送至您的 Email**。")
-                req_client = gr.Textbox(label="客戶名稱（必填）", placeholder="例如：TestClient")
-                req_project = gr.Textbox(label="客戶專案名稱（必填）", placeholder="例如：PartsAOI")
+                gr.Markdown("### 🆕 免費申請測試專案（開通即享專屬獨立空間）")
+                gr.Markdown("填寫下方資訊，審核開通後我們將把**專屬帳號與密碼寄至您的 Email**，立即上傳產線圖免費評估！")
+                req_client = gr.Textbox(label="公司 / 客戶名稱（必填）", placeholder="例如：XX科技")
+                req_project = gr.Textbox(label="檢測專案名稱（必填）", placeholder="例如：陶瓷瑕疵檢測 / 零件定位")
                 req_contact = gr.Textbox(label="聯絡人姓名", placeholder="例如：王小明")
-                req_email = gr.Textbox(label="聯絡 Email（必填，用於接收密碼）", placeholder="name@company.com")
-                req_note = gr.Textbox(label="電話或專案簡述（選填）", placeholder="例如：0912-345-678 / 4種零件辨識")
-                btn_req = gr.Button("📩 提交開案申請", variant="secondary")
+                req_email = gr.Textbox(label="聯絡 Email（必填，用於接收密碼與進度通知）", placeholder="name@company.com")
+                req_note = gr.Textbox(label="聯絡電話或檢測需求簡述（選填）", placeholder="例如：0912-345-678 / 表面刮傷與缺角檢測")
+                btn_req = gr.Button("🚀 免費提交開案測試申請", variant="primary")
                 req_msg = gr.Markdown()
 
         btn_req.click(
             handle_project_request,
             inputs=[req_client, req_project, req_contact, req_email, req_note],
             outputs=req_msg,
+        ).then(
+            None,
+            inputs=[req_msg],
+            outputs=[req_msg],
+            js=_build_conversion_js(),
         )
         gr.Markdown(
             "---\n"
@@ -1297,8 +1384,9 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台") as demo:
         outputs=[current_project, login_msg, auth_panel, main_panel],
     )
 
-# === FastAPI + Remote MCP (/mcp) + AGY Bridge (/api/agy-review) + Gradio 單一入口整合 ===
+# === FastAPI + 靜態展示圖 (/assets) + Remote MCP (/mcp) + AGY Bridge (/api/agy-review) + Gradio 單一入口整合 ===
 fastapi_app = FastAPI(title="MetaVision AOI Portal & Remote MCP")
+fastapi_app.mount("/assets", StaticFiles(directory=str(STATIC_ASSETS_DIR)), name="static_assets")
 fastapi_app.include_router(create_mcp_router(sys.modules[__name__]))
 fastapi_app.include_router(create_agy_bridge_router())
 fastapi_app = gr.mount_gradio_app(fastapi_app, demo, path="/")
