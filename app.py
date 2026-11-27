@@ -1005,7 +1005,7 @@ HELP_GUIDE_MD = """
 1. **全程 HTTPS 加密 ＋ 零外露埠口**：所有圖片上傳、盲測與 Remote MCP 皆經由 Cloudflare TLS/HTTPS 加密通道傳輸，主機不對外開放實體 Port。
 2. **專案帳號與目錄 100% 獨立隔離**：單一帳密僅能存取所屬專案，不同客戶間完全無法互看任何影像、規格書或報表。
 3. **自有專機保管、絕不挪作他用**：所有產線原圖僅存放於 MetaVision 專屬內部主機，不上傳公開雲端，且絕不將貴司影像用於其他客戶模型訓練。
-4. **結案可徹底銷毀 ＋ 支援 100% 斷網離線交付**：驗收結案後可依要求清檔；正式產線支援交付單一原生 C++ DLL 或離線綠色版，拔掉網路線亦可毫秒級運作。
+4. **結案可徹底銷毀 ＋ 支援 100% 斷網離線交付**：驗收結案後可依要求清檔；正式產線支援交付**純 CPU 單一原生 C++ DLL**、**免裝 CUDA 之 GPU 加速版（~10ms / 100 FPS，適用 NVIDIA / AMD / Intel）**或離線綠色版，拔掉網路線亦可毫秒級運作。
 """
 
 
@@ -1102,10 +1102,10 @@ LANDING_HERO_HTML = """
     METAVISION AOI PLATFORM ｜ 工業級 AI 視覺檢測交付平台
   </div>
   <h1 style="margin:0 0 10px 0;font-size:28px;line-height:1.3;color:#ffffff;font-weight:800;">
-    僅需 12 張產線圖即可起步・免 GPU 0.08 秒/張高速辨識
+    僅需 12 張產線圖即可起步・CPU 0.04 秒 / GPU 0.01 秒極速辨識
   </h1>
   <p style="margin:0 0 18px 0;font-size:15px;line-height:1.65;color:#cbd5e1;max-width:960px;">
-    專為工廠<b>瑕疵檢測、精密定位、目標計數與 DataMatrix / QR 工業讀碼</b>打造。無需自行標註或購買昂貴顯卡，只要上傳產線實拍圖即可免費驗證；正式版支援<b> 100% 斷網單檔 C++ DLL</b>、離線綠色版與產線 Watchdog 自動交付。
+    專為工廠<b>瑕疵檢測、精密定位、目標計數與 DataMatrix / QR 工業讀碼</b>打造。無需自行標註，只要上傳產線實拍圖即可免費驗證；正式版同時支援<b>純 CPU 100% 斷網單檔 C++ DLL</b>，以及<b>免裝 CUDA 之 GPU 加速交付（NVIDIA / AMD / Intel 顯卡皆適用）</b>與離線綠色版。
   </p>
 
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:20px;">
@@ -1114,8 +1114,8 @@ LANDING_HERO_HTML = """
       <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">極少樣本自動標註與合成擴增</div>
     </div>
     <div style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;">
-      <div style="font-size:20px;font-weight:800;color:#34d399;">0.085 秒 / 張</div>
-      <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">免顯卡一般工控機 CPU 毫秒推論</div>
+      <div style="font-size:20px;font-weight:800;color:#34d399;">CPU 35ms / GPU 10ms</div>
+      <div style="font-size:12px;color:#cbd5e1;margin-top:2px;">免顯卡單檔跑，搭顯卡免裝 CUDA 飆百 FPS</div>
     </div>
     <div style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:12px 14px;">
       <div style="font-size:20px;font-weight:800;color:#fbbf24;">100% 斷網單檔 DLL</div>
