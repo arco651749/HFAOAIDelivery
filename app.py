@@ -1132,13 +1132,13 @@ LANDING_HERO_HTML = """
   </div>
   <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;">
     <div style="background:#0b1220;border:1px solid rgba(148,163,184,0.28);border-radius:10px;overflow:hidden;">
-      <img src="/assets/showcase_1.jpg" alt="MetaVision AOI 實拍盲測展示 1" style="width:100%;height:auto;display:block;" />
+      <img src="/mv_static/showcase_1.jpg" alt="MetaVision AOI 實拍盲測展示 1" style="width:100%;height:auto;display:block;" />
       <div style="padding:8px 12px;font-size:12px;color:#cbd5e1;">
         ✅ <b>取料中途多目標並存</b>：同時精準框出線軸與底層綠墊並輸出機械手臂中心座標 (cx, cy)
       </div>
     </div>
     <div style="background:#0b1220;border:1px solid rgba(148,163,184,0.28);border-radius:10px;overflow:hidden;">
-      <img src="/assets/showcase_2.jpg" alt="MetaVision AOI 實拍盲測展示 2" style="width:100%;height:auto;display:block;" />
+      <img src="/mv_static/showcase_2.jpg" alt="MetaVision AOI 實拍盲測展示 2" style="width:100%;height:auto;display:block;" />
       <div style="padding:8px 12px;font-size:12px;color:#cbd5e1;">
         ✅ <b>抗強反光與站外干擾</b>：自動排除環境雜訊，單張純 CPU 耗時 &lt; 0.09 秒並一鍵產出 Excel 報表
       </div>
@@ -1384,9 +1384,9 @@ with gr.Blocks(title="MetaVision AOI 全自動視覺檢測平台", head=_build_g
         outputs=[current_project, login_msg, auth_panel, main_panel],
     )
 
-# === FastAPI + 靜態展示圖 (/assets) + Remote MCP (/mcp) + AGY Bridge (/api/agy-review) + Gradio 單一入口整合 ===
+# === FastAPI + 靜態展示圖 (/mv_static，避開 Gradio 內建 /assets) + Remote MCP (/mcp) + AGY Bridge + Gradio ===
 fastapi_app = FastAPI(title="MetaVision AOI Portal & Remote MCP")
-fastapi_app.mount("/assets", StaticFiles(directory=str(STATIC_ASSETS_DIR)), name="static_assets")
+fastapi_app.mount("/mv_static", StaticFiles(directory=str(STATIC_ASSETS_DIR)), name="mv_static")
 fastapi_app.include_router(create_mcp_router(sys.modules[__name__]))
 fastapi_app.include_router(create_agy_bridge_router())
 fastapi_app = gr.mount_gradio_app(fastapi_app, demo, path="/")
